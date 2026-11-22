@@ -30,8 +30,9 @@ session: read its §2 and the section for the module we're working on.
 - Don't install system packages or change global config without asking.
 
 ## Conventions
-- Plan paths are relative to `ip/async_fifo/` unless they start with `common/`,
-  `docs/` or `tools_smoke/`.
+- Plan paths are relative to `ip/async_fifo/` unless they start with `common/` or
+  `tools_smoke/`, or are a repo-level doc: docs/{PROJECT_PLAN,progress,decisions,toolchain}.md.
+  Any other `docs/` path (spec, vplan, results, ...) means `ip/async_fifo/docs/` (DEC-005).
 - Parameters: ASIZE (address bits, >= 2), DSIZE, DEPTH = 1 << ASIZE.
   Simulation default ASIZE=4, DSIZE=8. Formal and MCY: ASIZE=2..3, DSIZE=4.
 - Ports: wclk wrst_n winc wdata wfull rclk rrst_n rinc rdata rempty.

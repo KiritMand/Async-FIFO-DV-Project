@@ -72,6 +72,7 @@ Run on 2026-11-21 with the pinned versions above: all PASS, 765 s total (T1 211 
 | T4 | Two-clock formal: `multiclock on`, `(* gclk *)`, labeled assert + cover | SBY + Yosys (native reader) + yices | **PASS** | `prove`: k-induction succeeds; `cover`: `cov_T4_q2_rose_twice` reached at step 9, trace `out/tools_smoke/T4/cover/engine_0/trace0.vcd` (converts with `vcd2fst`; open by hand in GTKWave/Surfer); BREAK build fails as `ast_T4_q2_from_q1`. |
 | T5 | MCY `bitcnt` example end to end (`init`, `run -j4`, `status`) | MCY + Icarus + SBY | **PASS** | 1000 mutations, ~8 min at `-j4`. Run A: COVERED 901 / UNCOVERED 55 / NOCHANGE 44 → 94.25%; run B: 896 / 63 / 41 → 93.43%. Example vendored unmodified (`tools_smoke/T5_mcy/bitcnt/SOURCE.txt`). |
 | T6 | *(extra, for DEC-002)* concurrent SVA in formal | Yosys native / yosys-slang | **unsupported (as expected)** | native: `syntax error, unexpected '@'`; slang: `encountered unsupported SVA feature` — even for `a \|-> 1'b1`. T6 PASSes while this holds and FAILs if support appears. |
+| T7 | *(M1, 2026-11-22)* elaboration-time parameter guard: `if (ASIZE < 2) begin : g $error("..."); end` | Verilator, Yosys native | **PASS, with a caveat** | Yosys (`chparam` and `hierarchy -chparam`): `ERROR: ...`, exit 1. Verilator: only **warning** `USERERROR`; exit 1 only because warnings are fatal by default — `-Wno-fatal` lets ASIZE=1 through (exit 0). `-Werror-USERERROR` makes it a hard error even with `-Wno-fatal`. `$fatal` is no better (warning `USERFATAL`). Yosys prints `%0d` format specs verbatim, so the message carries no value. |
 
 ## Findings that affect later modules
 
@@ -97,3 +98,25 @@ Run on 2026-11-21 with the pinned versions above: all PASS, 765 s total (T1 211 
   testbench will need `maxbatchsize`/`mutsel` batching (plan R8).
 - **SBY config comments.** `#` comment lines are accepted in every `.sby` section, including
   `[script]` (verified by T4 after DEC-004 commenting).
+- **Parameter guard (M1+, T7).** Every Verilator command that builds the RTL (lint, smoke, UVM,
+  MCY sim) must pass `-Werror-USERERROR`; otherwise a flow that uses `-Wno-fatal` would silently
+  elaborate ASIZE=1. Yosys stops on its own.
+- **Comments that start with "verilator" are pragmas.** `// Verilator reports ...` fails lint
+  with `%Error-BADVLTPRAGMA: Unknown verilator comment` (seen in M1). Don't begin a comment
+  with the word *verilator* unless it is a real `verilator lint_off/...` pragma.
+- **Flop count after `synth` (M1).** Yosys folds each gray pointer MSB into the binary MSB
+  (`assign wptr[ASIZE] = wbin[ASIZE]`; gray MSB = binary MSB), so `synth; stat` shows
+  `8·(ASIZE+1)` async-reset flops, not the plan's `8·(ASIZE+1)+2`. The `+2` count holds
+  before optimization (`proc` only: 42 bits at ASIZE=4). `make synth` checks the pre-opt count.
+- **No FST tracing on this host (M1).** `--trace-fst` builds fail: Verilator's FST writer
+  (`fstcpp_writer.cpp`) needs `lz4.h`. Only the runtime `liblz4-1` is installed, not the
+  `liblz4-dev` headers. Flows use VCD (`--trace`); convert with the suite's `vcd2fst` if
+  needed. Installing `liblz4-dev` would re-enable FST (a system package, so the owner decides).
+- **ZERODLY on run-time delays (M1).** `#(UNIT * wmul)` with a variable multiplier raises
+  `%Warning-ZERODLY` under `-Wall`. `tb_smoke.sv` waives it with a scoped
+  `/* verilator lint_off ZERODLY */` block, justified in a comment (multipliers are checked
+  >= 1). Other simulators ignore the comment.
+- **`-Wall` catches a dead synchronizer stage (M1 self-test).** An RTL variant whose flag used
+  `wq1_rptr` (one-stage synchronizer) failed the smoke build with `UNUSEDSIGNAL 'wq2_rptr'`.
+  With that warning waived, smoke *passes* it (wfull latency 2 < K = 3 is legal), so lint is
+  the only M1 check that sees this bug. This is useful for M8's detection matrix.

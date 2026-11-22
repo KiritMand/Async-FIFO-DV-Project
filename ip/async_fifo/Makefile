@@ -63,17 +63,79 @@ help: ## [M0] List targets and variables
 	@echo "  OUT=$(OUT)"
 	@echo "  OSS_CAD_SUITE=$(OSS_CAD_SUITE)"
 
-# Static checks on the RTL alone: catches width/latch/unused-signal mistakes before simulating.
-lint: ## [M1] Lint the RTL (Verilator -Wall)
-	$(call stub,M1,verilator --lint-only -Wall -GASIZE=$(ASIZE) -GDSIZE=$(DSIZE) $(DUT_SRCS))
+# ---- Shared by the RTL flows below.
+# -Werror-USERERROR keeps the RTL's parameter guards fatal in every Verilator build (toolchain T7).
+VLT_GUARD  := -Werror-USERERROR
+# Variables for the printed repro line: sizes, plus any RTL override given on the command line.
+REPRO_VARS  = ASIZE=$(ASIZE) DSIZE=$(DSIZE)$(if $(filter command line,$(origin RTL_DIR)), RTL_DIR=$(RTL_DIR))$(if $(filter command line,$(origin DUT_SRCS)), DUT_SRCS='$(DUT_SRCS)')
+# Illegal sizes the RTL guards must reject (spec §2), as ASIZE:DSIZE:<parameter whose guard fires>.
+# lint checks them in Verilator, synth in Yosys; each must fail with that guard's own message.
+GUARD_CASES = 1:4:ASIZE 4:0:DSIZE
 
-# Proves the RTL is synthesizable and shows its flop/gate count.
-synth: ## [M1] Yosys synthesis + stat (checks synthesizability)
-	$(call stub,M1,yosys -p 'read_verilog -sv $(DUT_SRCS); chparam -set ASIZE $(ASIZE) async_fifo; synth -top async_fifo; stat')
+# Static checks on the RTL alone, at ASIZE:DSIZE and at the smallest formal size 2:4 (where the
+# full-flag slice [ASIZE-2:0] is one bit); then every GUARD_CASES size must be rejected.
+LINT_CFGS   = $(ASIZE):$(DSIZE) 2:4
+lint: ## [M1] Verilator -Wall at ASIZE:DSIZE and 2:4; ASIZE=1 and DSIZE=0 must be rejected
+	@mkdir -p $(OUT)/lint
+	@set -e; for c in $(LINT_CFGS); do \
+	  cmd="verilator --lint-only -Wall $(VLT_GUARD) -GASIZE=$${c%:*} -GDSIZE=$${c#*:} $(DUT_SRCS)"; \
+	  echo "+ $$cmd"; $$cmd; \
+	done
+	@for c in $(GUARD_CASES); do a=$${c%%:*}; r=$${c#*:}; d=$${r%%:*}; p=$${c##*:}; \
+	  log=$(OUT)/lint/reject_a$${a}_d$$d.log; \
+	  cmd="verilator --lint-only -Wall $(VLT_GUARD) -GASIZE=$$a -GDSIZE=$$d $(DUT_SRCS)"; \
+	  echo "+ $$cmd   # must be rejected"; \
+	  if $$cmd > $$log 2>&1; then echo "lint FAIL: ASIZE=$$a DSIZE=$$d was accepted" >&2; exit 1; fi; \
+	  grep -q "$$p must be >=" $$log || \
+	    { echo "lint FAIL: ASIZE=$$a DSIZE=$$d rejected without the $$p guard message, see $$log" >&2; exit 1; }; \
+	done
+	@echo "lint PASS   repro: make lint $(REPRO_VARS)"
 
-# Quick directed test without UVM, for first bring-up of the RTL at a given clock ratio.
-smoke: ## [M1] Directed non-UVM smoke test (RATIO=w:r)
-	$(call stub,M1,<sim> tb/smoke/tb_smoke.sv $(DUT_SRCS) +RATIO=$(RATIO) -> $(OUT)/smoke/)
+# Synthesizability (spec §10): the GUARD_CASES sizes must be rejected (Yosys accepted DSIZE=0
+# silently before the guard existed); structural check (no undriven or multiply driven nets, no
+# combinational loops); 8*(ASIZE+1)+2 async-reset flops before optimization; then synth + stat.
+YOSYS_READ  = read_verilog -sv $(DUT_SRCS); chparam -set ASIZE $(ASIZE) -set DSIZE $(DSIZE) async_fifo
+FLOPS       = $(shell echo $$((8 * ($(ASIZE) + 1) + 2)))
+synth: ## [M1] Yosys: guards reject bad sizes, check -assert, pre-opt flop count, synth + stat
+	@mkdir -p $(OUT)/synth
+	@for c in $(GUARD_CASES); do a=$${c%%:*}; r=$${c#*:}; d=$${r%%:*}; p=$${c##*:}; \
+	  log=$(OUT)/synth/reject_a$${a}_d$$d.log; \
+	  cmd="yosys -q -p 'read_verilog -sv $(DUT_SRCS); chparam -set ASIZE $$a -set DSIZE $$d async_fifo; prep -top async_fifo'"; \
+	  echo "+ $$cmd   # must be rejected"; \
+	  if eval "$$cmd" > $$log 2>&1; then echo "synth FAIL: ASIZE=$$a DSIZE=$$d was accepted" >&2; exit 1; fi; \
+	  grep -q "$$p must be >=" $$log || \
+	    { echo "synth FAIL: ASIZE=$$a DSIZE=$$d rejected without the $$p guard message, see $$log" >&2; exit 1; }; \
+	done
+	yosys -q -l $(OUT)/synth/check.log -p '$(YOSYS_READ); prep -top async_fifo; check -assert'
+	yosys -q -l $(OUT)/synth/flops.log -p '$(YOSYS_READ); hierarchy -top async_fifo; proc; opt_clean; simplemap t:$$adff; select -assert-count $(FLOPS) t:$$_DFF_PN0_ t:$$_DFF_PN1_'
+	yosys -q -l $(OUT)/synth/synth.log -p '$(YOSYS_READ); synth -top async_fifo; tee -o $(OUT)/synth/stat.txt stat'
+	@grep -E '[0-9]+ +(cells|\$$_)' $(OUT)/synth/stat.txt | sed 's/^ */  /'
+	@echo "synth PASS: check -assert clean, $(FLOPS) async-reset flops before optimization   repro: make synth $(REPRO_VARS)"
+
+# Directed non-UVM smoke test (tb/smoke/tb_smoke.sv), built once per ASIZE/DSIZE; the clock ratio
+# is a run-time plusarg, so one build runs every ratio. Default: 1:3 and 3:1 (M1 Done-when).
+# RATIO="w:r ..." = wclk period : rclk period; TRACE=1 writes smoke.vcd next to each run log
+# (VCD, not FST: this Verilator's FST writer needs lz4.h, which the host lacks — toolchain.md).
+SMOKE_BLD   = $(OUT)/smoke/build_a$(ASIZE)_d$(DSIZE)
+TRACE      ?= 0
+smoke: RATIO = 1:3 3:1
+smoke: ## [M1] Directed smoke test at RATIO="1:3 3:1" (wclk:rclk periods); TRACE=1 for VCD
+	@mkdir -p $(SMOKE_BLD)
+	@cmd="verilator --binary --timing -Wall $(VLT_GUARD) --timescale 1ns/1ps --trace -j $(J) -GASIZE=$(ASIZE) -GDSIZE=$(DSIZE) --top-module tb_smoke -Mdir $(SMOKE_BLD) $(IP_ROOT)/tb/smoke/tb_smoke.sv $(DUT_SRCS)"; \
+	  echo "+ $$cmd"; \
+	  $$cmd > $(SMOKE_BLD)/build.log 2>&1 || { grep -E '%(Error|Warning)' $(SMOKE_BLD)/build.log | head -20; \
+	    echo "smoke FAIL: build, see $(SMOKE_BLD)/build.log" >&2; exit 1; }
+	@set -e; for r in $(RATIO); do \
+	  d=$(OUT)/smoke/a$(ASIZE)_d$(DSIZE)_r$$(echo $$r | tr : _); mkdir -p $$d; \
+	  cmd="$(SMOKE_BLD)/Vtb_smoke +RATIO=$$r$(if $(filter 1,$(TRACE)), +trace)"; \
+	  echo "+ (cd $$d && $$cmd) > $$d/run.log"; \
+	  rc=0; (cd $$d && $$cmd) > $$d/run.log 2>&1 || rc=$$?; \
+	  grep -E '^SMOKE (config|PASS|FAIL)' $$d/run.log | sed 's/^/  /' || true; \
+	  if [ $$rc -ne 0 ] || ! grep -q '^SMOKE PASS' $$d/run.log; then \
+	    echo "smoke FAIL at RATIO=$$r (exit $$rc), log $$d/run.log   repro: make smoke RATIO=$$r $(REPRO_VARS) TRACE=1" >&2; \
+	    exit 1; fi; \
+	done
+	@echo "smoke PASS at RATIO=\"$(RATIO)\"   repro: make smoke RATIO=\"$(RATIO)\" $(REPRO_VARS)"
 
 # One UVM test at one seed; delegates to the simulator layer in common/sim/<SIM>.mk.
 sim: ## [M3] One UVM test: TEST=<t> SEED=<s> SIM=<sim>

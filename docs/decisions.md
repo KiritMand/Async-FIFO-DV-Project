@@ -88,3 +88,22 @@ IDs are `DEC-NNN`; cite them from code comments and other docs.
 - **Consequences:** M0 step 4's "≤ 40 lines" limit for `tools_smoke/` experiments now counts
   code lines only, so required comments don't push experiments over it. Existing M0 files were
   commented retroactively on 2026-11-21 and `make tools-smoke` rerun.
+
+## DEC-005 — Block-level docs live in `ip/async_fifo/docs/`
+
+- **Date:** 2026-11-22
+- **Status:** APPROVED (owner, 2026-11-22, M1 kickoff: "your defaults") — applied to `CLAUDE.md`
+  Conventions and `docs/PROJECT_PLAN.md` §2 and §4 (plan v1.2)
+- **Options:**
+  1. Read the path rule literally: `docs/spec.md`, `docs/vplan.md`, … at repo level.
+  2. Follow the §4 layout tree: block docs in `ip/async_fifo/docs/`; repo-level `docs/` holds
+     only `PROJECT_PLAN.md`, `progress.md`, `decisions.md`, `toolchain.md`.
+- **Choice:** option 2.
+- **Reason:** the §4 tree already puts spec, vplan, vplan_status, coverage_closure, formal_notes,
+  bug_matrix, mutation_report, results and interview_notes under `ip/async_fifo/docs/`; the old
+  wording of the path rule contradicted it. Block docs should travel with the block when a
+  second `ip/<name>/` is added.
+- **Consequences:** a plan path `docs/<x>.md` means `ip/async_fifo/docs/<x>.md` unless `<x>` is
+  one of the four repo-level docs. Scripts (`vplan_check.py`, `bug_matrix.py`,
+  `make_results.py`) write there. The integrity rule's "docs/vplan.md" is
+  `ip/async_fifo/docs/vplan.md`.
