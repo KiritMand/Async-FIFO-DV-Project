@@ -1,0 +1,22 @@
+Vendored unmodified from https://github.com/YosysHQ/mcy/tree/5a2cad0cbefceb7f23051c08348bd23128fd1046/examples/bitcnt
+(the example used by YosysHQ AppNote 400). Fetched 2026-11-21. Licence: ISC (see file headers).
+T5 copies this directory to out/tools_smoke/T5/bitcnt and runs MCY there.
+Files here are not edited (DEC-004); this note explains what each one is for.
+
+What each file does:
+  bitcnt.v      Design under mutation: counts leading zeros, trailing zeros or set bits
+                (64- or 32-bit) on a 64-bit input, selected by din_func.
+  config.mcy    MCY project: how to read the design, which tests to run on each mutant,
+                and the [logic] that turns test results into tags
+                (COVERED / UNCOVERED / NOCHANGE / EQGAP / FMONLY) and the coverage score.
+  test_sim.sh   Simulation test: builds the mutant, runs bitcnt_tb.v under Icarus, and
+                reports PASS (testbench missed the mutation) or FAIL (caught it).
+  bitcnt_tb.v   Testbench with fixed input vectors and expected outputs for bitcnt.
+  test_eq.sh    Equivalence test: checks whether the mutant behaves differently from the
+                original at all (FAIL = a real change); filters out harmless mutations.
+  test_eq.sv    Miter for test_eq: original and mutant side by side, asserting equal outputs.
+  test_eq.sby   SBY job for the miter (BMC depth 1, enough for this combinational design).
+  test_fm.sh    Optional formal test (unused: config sets use_formal = False).
+  test_fm.sv    Formal testbench for test_fm: two bitcnt copies with relational properties
+                (e.g. shifting the input by one bit changes the count by exactly one).
+  test_fm.sby   SBY job for test_fm.

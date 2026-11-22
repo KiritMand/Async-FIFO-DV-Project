@@ -1,0 +1,32 @@
+# SymbiYosys job for T4. Run one task with: sby -f t4.sby <task>
+
+# Three jobs: prove the assertion, reach the cover, and check that the BREAK bug is caught.
+[tasks]
+prove
+cover
+bad
+
+# Per-task mode and depth. prove = k-induction (unbounded); bmc/cover = bounded search.
+# multiclock on: clocks are ordinary inputs stepped on the global clock (required for 2 clocks).
+[options]
+prove: mode prove
+bad: mode bmc
+bad: depth 12
+cover: mode cover
+cover: depth 30
+multiclock on
+
+# Solver backend: yosys-smtbmc driving the yices SMT solver.
+[engines]
+smtbmc yices
+
+# Yosys script: read the design with FORMAL defined (adds -DBREAK for the bad task), then
+# elaborate with t4_cdc as top.
+[script]
+bad: read -formal -DBREAK t4_cdc.sv
+~bad: read -formal t4_cdc.sv
+prep -top t4_cdc
+
+# Source files copied into each task's work directory.
+[files]
+t4_cdc.sv

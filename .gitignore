@@ -1,0 +1,40 @@
+# Owner's choice: the project plan stays local, not in git
+docs/PROJECT_PLAN.md
+
+# All generated output lives here
+out/
+
+# Simulator build/run droppings (if a tool is ever run outside out/)
+obj_dir/
+xsim.dir/
+.Xil/
+*.jou
+*.pb
+webtalk*
+work/
+transcript
+*.wlf
+*.ucdb
+*.vcd
+*.fst
+coverage.dat
+
+# SymbiYosys task directories (<sbyfile>_<task>/); flows pass -d out/... but be safe
+*_bmc/
+*_prove/
+*_cover/
+*_pdr/
+*_live/
+
+# MCY working state
+**/mcy/database/
+**/mcy/tasks/
+tools_smoke/**/database/
+tools_smoke/**/tasks/
+
+# Python
+__pycache__/
+*.pyc
+
+# Local Claude Code settings
+.claude/settings.local.json
