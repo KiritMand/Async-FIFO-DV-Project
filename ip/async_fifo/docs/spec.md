@@ -1,6 +1,6 @@
 # async_fifo — Behavioral specification
 
-**Version** 0.3 (draft) · **Date** 2026-11-22 · **Status** DRAFT by Claude (M1 step 2); two items in §13 await the owner ·
+**Version** 1.0 · **Date** 2026-11-22 · **Status** APPROVED (owner, 2026-11-22) ·
 **RTL** `rtl/async_fifo.sv`, baseline tag `rtl-v1` (written by Claude in FAST MODE, 2026-11-22; lint, synth and smoke clean)
 
 This document is the contract every checker is written against: the scoreboard (M3), the
@@ -292,17 +292,17 @@ Later modules depend on these structural choices.
 - Inputs that violate setup or hold in their own domain, and X on inputs.
 - A configurable number of synchronizer stages.
 
-## 13. Open items for the owner
+## 13. Open items (all closed)
 
 - [x] K = 3 (§7.4), derived from the RTL. `make smoke` measures exactly 3 edges in both
       directions at ratios 1:3, 3:1, 1:1, 2:3, 4:1 and 1:4, at ASIZE 2, 3 and 4.
-- [ ] **Owner to confirm:** the coincident-edge convention (§5). The evidence so far:
+- [x] The coincident-edge convention (§5): **confirmed by the owner, 2026-11-22.** Evidence:
   - In the RTL, a synchronizer flop clocked at the same instant as the source pointer update
     samples the old pointer (non-blocking semantics).
   - `make smoke` at integer ratios puts every slow-clock edge on a fast-clock edge, and the
     latency there is still exactly K.
-- [ ] **Owner to confirm:** the wording of W5 (capacity) and R3 (`rdata` stability). Both
-      become vplan rows (plan M2: F12, F14).
+- [x] The wording of W5 (capacity) and R3 (`rdata` stability): **confirmed by the owner,
+      2026-11-22.** Both become vplan rows (plan M2: F12, F14).
   - W5: `make smoke` checks `wfull` is exact at every edge of a fill and rises with the
     DEPTH-th write.
   - R3: `rdata` is checked against the model head at every `rclk` negedge, including while the
@@ -315,6 +315,7 @@ Later modules depend on these structural choices.
 | 0.1 | 2026-11-22 | Claude | First draft (M1 step 2) |
 | 0.2 | 2026-11-22 | Claude | K = 3 with derivation (§7.4); flop count before/after optimization (§10); open items updated with smoke evidence |
 | 0.3 | 2026-11-22 | Claude | DSIZE < 1 elaboration check added to §2 (M1 step 7, review finding) |
+| 1.0 | 2026-11-22 | Owner | Approved: §5 coincident-edge convention and §6 W5/R3 wording confirmed; §13 closed |
 
 ## Reference
 

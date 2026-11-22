@@ -107,3 +107,26 @@ IDs are `DEC-NNN`; cite them from code comments and other docs.
   one of the four repo-level docs. Scripts (`vplan_check.py`, `bug_matrix.py`,
   `make_results.py`) write there. The integrity rule's "docs/vplan.md" is
   `ip/async_fifo/docs/vplan.md`.
+
+## DEC-006 — Every plan step is owned by Claude Code
+
+- **Date:** 2026-11-22
+- **Status:** APPROVED (owner request, 2026-11-22, after M1) — applied to `docs/PROJECT_PLAN.md`
+  §0, §2 and §6 (plan v1.3) and to `CLAUDE.md` "How we work" and Conventions
+- **Options:**
+  1. Keep the [YOU] / [CLAUDE] / [PAIR] split, with learning mode on.
+  2. Reassign every [YOU] step to Claude Code. Milestones, steps, deliverables and Done-when
+     checks stay the same.
+- **Choice:** option 2.
+- **Reason:** owner's decision.
+- **Consequences:**
+  - The 14 former [YOU] steps in M0–M11 are now [CLAUDE], and prose that gave a task to the
+    owner ("written by you", "you write the covergroups", …) names Claude instead.
+    `CLAUDE.md` no longer has the LEARNING MODE / FAST MODE clause, and Claude writes the
+    DEC-004 purpose comments in every file.
+  - [PAIR] steps are unchanged: Claude drafts, the owner decides. The integrity rules are
+    unchanged. In particular, a suspected RTL bug is still reported first, and the RTL is
+    fixed only after the owner's OK (plan M7 step 4 now says so).
+  - M11 now compares single-shot LLM-drafted properties with the M6/M7 set, which Claude Code
+    also writes, iteratively and with formal feedback, rather than with a human-written set.
+    `ai_sva/REPORT.md` must list this under threats to validity.

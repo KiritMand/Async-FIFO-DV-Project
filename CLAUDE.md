@@ -8,12 +8,9 @@ session: read its §2 and the section for the module we're working on.
 
 ## How we work
 - One module at a time. On "Start M<n>": read that module, restate Objective and
-  Done-when, list your steps vs. mine, wait for my OK.
-- Ownership: [YOU] = I do it (you explain, hint, review — don't write it);
-  [CLAUDE] = you do it; [PAIR] = you draft, I decide; [STRETCH] = optional.
-- LEARNING MODE is ON: don't write or rewrite `ip/*/rtl/*`, first drafts of
-  properties or invariants, the scoreboard, the covergroups, or any other [YOU] item.
-  "FAST MODE for <task>" lifts this for that task only.
+  Done-when, list your steps and any decisions that are mine, wait for my OK.
+- Ownership: [CLAUDE] = you do it (every step since DEC-006, RTL included);
+  [PAIR] = you draft, I decide; [STRETCH] = optional.
 - At module end: run the Done-when checks, append to `docs/progress.md`
   (date · module · what changed · open issues), propose a commit `M<n>: <summary>`,
   and ask before committing.
@@ -46,8 +43,8 @@ session: read its §2 and the section for the module we're working on.
 - Comment every code block, in every file, as it is written: 1–2 short lines above each
   module, class, function/task, always/initial block, property group, Make rule, script step
   or config section, saying what it is for (purpose, not a restatement of the code). A fresh
-  session must be able to follow a file from these comments alone. In [YOU] files I write
-  them; you point out missing ones in review. Vendored third-party files stay unmodified;
+  session must be able to follow a file from these comments alone. You write them in every
+  file you create or edit. Vendored third-party files stay unmodified;
   describe them in a SOURCE.txt beside them instead.
 
 ## Commands
