@@ -1,0 +1,39 @@
+# regress/tests.toml — the regression list (plan M4 step 3), read by common/scripts/regress.py
+# in M5. One [[test]] table per UVM test in vplan §2.2. Seeds run 1..seeds, so every run is
+# `make sim TEST=<name> SEED=<n> PLUSARGS='<plusargs>'`.
+
+# Defaults for every test. seeds = N from vplan §7 (owner decision, 2026-11-22). timeout_s is
+# the wall-clock limit per run: the slowest of 1,400 M4 runs took 0.84 s on this host, so 60 s
+# leaves room for a loaded machine yet still catches a hang the UVM watchdog misses.
+[defaults]
+seeds     = 200
+timeout_s = 60
+plusargs  = ""
+
+# Directed: DEPTH+2 writes (two blocked), then read to empty with blocked reads (M3).
+[[test]]
+name = "smoke_test"
+
+# Rounds of fill at 100% until k blocked writes, then drain; F12 capacity per round.
+[[test]]
+name = "fill_to_full_test"
+
+# Rounds of fill to DEPTH, then read at 100% until k blocked reads; drain count per round.
+[[test]]
+name = "drain_to_empty_test"
+
+# Fill bounces between DEPTH-1 and DEPTH; >= 20 crossings; 50% integer ratios (M4/D1).
+[[test]]
+name = "thrash_full_test"
+
+# Fill bounces between 0 and 1; >= 20 crossings; 50% integer ratios (M4/D1).
+[[test]]
+name = "thrash_empty_test"
+
+# 4..8 timed phases with independent write and read rates, then S5 top-up phases.
+[[test]]
+name = "random_rates_test"
+
+# A random series of the M4 virtual sequences in short form.
+[[test]]
+name = "random_mix_test"

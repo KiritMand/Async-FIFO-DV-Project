@@ -38,6 +38,13 @@ package fifo_tb_pkg;
   `include "fifo_env.sv"
   `include "fifo_agent_seqs.sv"
   `include "fifo_vseqs.sv"
+  `include "fifo_random_vseqs.sv"
   `include "fifo_base_test.sv"
   `include "smoke_test.sv"
+  `include "fill_to_full_test.sv"
+  `include "drain_to_empty_test.sv"
+  `include "thrash_full_test.sv"
+  `include "thrash_empty_test.sv"
+  `include "random_rates_test.sv"
+  `include "random_mix_test.sv"
 endpackage

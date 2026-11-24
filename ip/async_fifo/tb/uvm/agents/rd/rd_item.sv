@@ -8,6 +8,7 @@ class rd_item extends uvm_sequence_item;
   // Stimulus (set by a sequence; plain fields, see wr_item).
   int unsigned  idle   = 0;      // edges with no request before the attempt
   flag_policy_e policy = FLAG_CFG;  // how the attempt treats rempty
+  bit           nop    = 0;      // 1: only wait `idle` edges, no attempt (timed phases, M4)
 
   // Observed (driver response, or monitor sample at one edge).
   op_status_e   status = OP_IDLE;  // accepted, blocked, gated (driver only) or idle

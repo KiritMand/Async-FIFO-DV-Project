@@ -47,10 +47,15 @@ class rd_driver extends uvm_driver #(rd_item);
 
   // One attempt: `idle` edges without a request, then the request for one edge; the outcome
   // comes from that edge's pre-edge samples (no rinc = gated, rinc with rempty = blocked).
+  // A nop item ends after the idle edges (status OP_IDLE).
   task drive_attempt(rd_item it);
     repeat (it.idle) begin
       vif.drv_cb.req <= 1'b0;
       @(vif.drv_cb);
+    end
+    if (it.nop) begin
+      it.status = OP_IDLE;
+      return;
     end
     vif.drv_cb.req          <= 1'b1;
     vif.drv_cb.ignore_empty <= ignore_flag(it.policy);

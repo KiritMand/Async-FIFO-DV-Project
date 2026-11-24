@@ -50,10 +50,15 @@ class wr_driver extends uvm_driver #(wr_item);
 
   // One attempt: `idle` edges without a request, then the request for one edge. The outcome
   // comes from that edge's pre-edge samples: no winc = gated, winc with wfull = blocked.
+  // A nop item ends after the idle edges (status OP_IDLE).
   task drive_attempt(wr_item it);
     repeat (it.idle) begin
       vif.drv_cb.req <= 1'b0;
       @(vif.drv_cb);
+    end
+    if (it.nop) begin
+      it.status = OP_IDLE;
+      return;
     end
     vif.drv_cb.req         <= 1'b1;
     vif.drv_cb.wdata       <= it.data;

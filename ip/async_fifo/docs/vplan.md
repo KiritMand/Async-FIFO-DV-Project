@@ -1,6 +1,6 @@
 # async_fifo — Verification plan
 
-**Version** 0.1 · **Date** 2026-11-22 · **Status** DRAFT: owner decisions applied (feature-table
+**Version** 0.2 · **Date** 2026-11-24 · **Status** DRAFT: owner decisions applied (feature-table
 edits, power-up-only resets, N = 200); full text awaiting owner review ·
 **Spec** [`spec.md`](spec.md) v1.1 · **RTL** `rtl/async_fifo.sv`, tag `rtl-v1`
 
@@ -78,16 +78,18 @@ Retired IDs: none.
 ### 2.2 Tests
 
 M3 and M4 implement these names. `regress/tests.toml` lists them with their seed counts.
+Parameter values are the owner's M4 decisions (DEC-009). Every test except `smoke_test` fails
+with `S5_SHORT` if it makes fewer than 4·DEPTH accepted reads.
 
 | Test | Sequence | Module | Purpose |
 |---|---|---|---|
 | `smoke_test` | directed | M3 | DEPTH+2 writes, two of them blocked; then read to empty, with blocked reads |
-| `fill_to_full_test` | `vseq_fill_to_full` | M4 | Write at 100% with no reads until k blocked writes; then drain |
-| `drain_to_empty_test` | `vseq_drain_to_empty` | M4 | From full, read at 100% until k blocked reads |
-| `thrash_full_test` | `vseq_thrash_full` | M4 | Fill oscillates between DEPTH−1 and DEPTH for T cycles |
-| `thrash_empty_test` | `vseq_thrash_empty` | M4 | Fill oscillates between 0 and 1 for T cycles |
-| `random_rates_test` | `vseq_random_rates` | M4 | 4–8 phases, each re-randomizing both rates (weighted toward 0%, 100% and the middle) |
-| `random_mix_test` | `vseq_random_mix` | M4 | A random series of the sequences above |
+| `fill_to_full_test` | `vseq_fill_to_full` | M4 | 4–6 rounds: write at 100% with no reads, `wfull` ignored, until k ∈ [2, 4] blocked writes; then drain at the cfg's read rate. Each round checks F12 (`F12_CAPACITY`); the run checks max fill = DEPTH |
+| `drain_to_empty_test` | `vseq_drain_to_empty` | M4 | 4–6 rounds: fill to DEPTH at the cfg's write rate; then read at 100%, `rempty` ignored, until k ∈ [2, 4] blocked reads. Each round checks the drain count (`DRAIN_COUNT`) |
+| `thrash_full_test` | `vseq_thrash_full` | M4 | From DEPTH−1, write at 100% while reading at 1/d of the write side's full rate, d ∈ [7, 10], for max(4·DEPTH, 64) accepted reads; the fill bounces between DEPTH−1 and DEPTH, ≥ 20 crossings (`THRASH_WEAK`). 50% integer ratios (DEC-009) |
+| `thrash_empty_test` | `vseq_thrash_empty` | M4 | Mirror of `thrash_full_test` around 0 and 1: from fill 1, read at 100% while writing at 1/d of the read side's full rate, for max(4·DEPTH, 64) accepted writes, ≥ 20 crossings. 50% integer ratios |
+| `random_rates_test` | `vseq_random_rates` | M4 | 4–8 phases of 2·DEPTH to 8·DEPTH slower-clock cycles; each side's rate is 0% (weight 25), 100% (25) or [10, 90]% (50); then top-up phases until S5 is met |
+| `random_mix_test` | `vseq_random_mix` | M4 | 4–8 picks among the five sequences above in short form (one round, DEPTH thrash operations without the crossing check, 1–2 rate phases), then more picks until S5 is met |
 
 ### 2.3 Stimulus obligations
 
@@ -363,3 +365,4 @@ From spec §12, plus limits of the methods used:
 | Version | Date | Author | Change |
 |---|---|---|---|
 | 0.1 | 2026-11-22 | Claude | First draft (M2). Owner decisions applied: F01 adds W3/R5; F09(a) adds spec C4; F11 gets formal and `make synth` checks; F16 restricted to fill 1 and DEPTH−1; F17 added (reset release order); power-up-only resets (A05, DEC-007); N = 200. |
+| 0.2 | 2026-11-24 | Claude | M4: §2.2 test rows carry the approved stimulus parameters and their stimulus self-checks (DEC-009: 50% integer ratios in the thrash tests, thrash divisor d ∈ [7, 10] after measurement, thrash length max(4·DEPTH, 64), `S5_SHORT`). No feature, coverage or property change. |

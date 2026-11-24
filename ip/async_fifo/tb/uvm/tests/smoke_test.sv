@@ -5,9 +5,11 @@
 class smoke_test extends fifo_base_test;
   `uvm_component_utils(smoke_test)
 
-  // Constructor (UVM factory signature).
+  // Constructor (UVM factory signature). The directed traffic reads only DEPTH entries, so S5
+  // does not apply (vplan S5 exempts smoke_test).
   function new(string name, uvm_component parent);
     super.new(name, parent);
+    min_reads = 0;
   endfunction
 
   // Traffic knobs that match the directed traffic, so the printed configuration is truthful:

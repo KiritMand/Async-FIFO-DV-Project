@@ -2,7 +2,8 @@
 // A queue holds the expected contents, oldest first: accepted writes push, accepted reads pop and
 // compare. Same-timestamp rule: overflow and underflow are judged on the fill at the *start* of
 // the time step, so the order in which the two monitors deliver same-instant events can't hide
-// an overflow or underflow (spec §5 coincident-edge rule).
+// an overflow or underflow (spec §5 coincident-edge rule). It also counts boundary crossings and
+// keeps a window of fill statistics that the M4 thrash sequences check.
 
 // Analysis imps for the two monitors (macros must sit at package scope).
 `uvm_analysis_imp_decl(_wr)
@@ -19,10 +20,26 @@ class fifo_scoreboard extends uvm_scoreboard;
   protected bit    in_step;
   protected time   t_step;
   protected int    fill_at_start;
+  protected bit    step_wr, step_rd;  // this step has an accepted write / read
 
-  // Results for the report (and for tests that check them).
+  // Results for the report (and for tests that check them). max/min are over step-end fills.
   int unsigned n_writes, n_reads, n_mismatch, n_overflow, n_underflow, n_unknown;
-  int          max_fill, min_fill;
+  int          max_fill = 0, min_fill = DEPTH;
+
+  // Boundary crossings over the whole run (plan M4 step 4): a step-end fill change between
+  // DEPTH-1 and DEPTH (full) or between 0 and 1 (empty), either direction. One time step changes
+  // the fill by at most 1 (one edge per clock), so no crossing is skipped.
+  int unsigned n_full_x, n_empty_x;
+  protected int last_fill;  // step-end fill of the previous completed step
+
+  // Window: the same statistics over an interval a virtual sequence chooses (open_window()), e.g.
+  // only the thrash phase. Completed time steps only, like the run totals.
+  int          win_min, win_max;
+  int unsigned win_full_x, win_empty_x;
+
+  // Boundary concurrency (F16): time steps with both an accepted write and an accepted read,
+  // by the fill at the start of the step. The step-end hook M5's cg_concurrent will sample.
+  int unsigned n_conc_at_one, n_conc_at_depth_m1, n_conc_other;
 
   // Self-test hook (+SB_INJECT_ERROR or +SB_INJECT_ERROR=n): flip bit 0 of the n-th read's
   // expected value, so a correct DUT must fail (plan M3 Done-when). 0 = off.
@@ -45,7 +62,7 @@ class fifo_scoreboard extends uvm_scoreboard;
   endfunction
 
   // True fill right now. Within a time step it may include only some of that step's events;
-  // between time steps it is exact. Sequences read it after the NBA region (rd_until_empty_seq).
+  // between time steps it is exact. Sequences read it after the NBA region (rd_to_fill_seq).
   function int fill();
     return model.size();
   endfunction
@@ -58,13 +75,39 @@ class fifo_scoreboard extends uvm_scoreboard;
       in_step       = 1;
       t_step        = t;
       fill_at_start = model.size();
+      step_wr       = 0;
+      step_rd       = 0;
     end
   endfunction
 
-  // Max/min over fills at time-step boundaries (never a transient inside a step).
+  // Fold one completed time step: max/min and crossings, for the run and the window, and
+  // concurrency. Uses the fill at the step's end, never a transient inside it (DEPTH >= 4, so
+  // the two crossing pairs are disjoint).
   protected function void track_fill();
-    if (model.size() > max_fill) max_fill = model.size();
-    if (model.size() < min_fill) min_fill = model.size();
+    int f = model.size();
+    bit full_x  = (f == DEPTH && last_fill == DEPTH - 1) || (f == DEPTH - 1 && last_fill == DEPTH);
+    bit empty_x = (f == 1 && last_fill == 0) || (f == 0 && last_fill == 1);
+    if (f > max_fill) max_fill = f;
+    if (f < min_fill) min_fill = f;
+    if (f > win_max)  win_max  = f;
+    if (f < win_min)  win_min  = f;
+    if (full_x)  begin n_full_x++;  win_full_x++;  end
+    if (empty_x) begin n_empty_x++; win_empty_x++; end
+    if (step_wr && step_rd) begin
+      if (fill_at_start == 1)              n_conc_at_one++;
+      else if (fill_at_start == DEPTH - 1) n_conc_at_depth_m1++;
+      else                                 n_conc_other++;
+    end
+    last_fill = f;
+  endfunction
+
+  // Start a new window at the current fill. Called by a virtual sequence between operations, so
+  // the fill is exact (see fill()).
+  function void open_window();
+    win_min     = model.size();
+    win_max     = model.size();
+    win_full_x  = 0;
+    win_empty_x = 0;
   endfunction
 
   // Accepted write: an overflow if the FIFO already held DEPTH entries at the start of this
@@ -72,6 +115,7 @@ class fifo_scoreboard extends uvm_scoreboard;
   function void write_wr(wr_item it);
     begin_event(it.t);
     n_writes++;
+    step_wr = 1;
     if (fill_at_start >= DEPTH) begin
       n_overflow++;
       `uvm_error("SB_OVERFLOW", $sformatf("write #%0d accepted at %0t with fill %0d = DEPTH (F04/F06: wfull optimistic)",
@@ -86,6 +130,7 @@ class fifo_scoreboard extends uvm_scoreboard;
     data_t exp;
     begin_event(it.t);
     n_reads++;
+    step_rd = 1;
     if ($isunknown(it.data)) begin
       n_unknown++;
       `uvm_error("SB_UNKNOWN", $sformatf("read #%0d at %0t: rdata has X/Z bits (%h)", n_reads, it.t, it.data))
@@ -117,8 +162,11 @@ class fifo_scoreboard extends uvm_scoreboard;
 
   // Summary line for the log.
   function void report_phase(uvm_phase phase);
-    `uvm_info("SB", $sformatf("writes=%0d reads=%0d mismatches=%0d overflows=%0d underflows=%0d unknown=%0d max_fill=%0d min_fill=%0d leftover=%0d",
+    `uvm_info("SB", $sformatf({"writes=%0d reads=%0d mismatches=%0d overflows=%0d underflows=%0d unknown=%0d ",
+                               "max_fill=%0d min_fill=%0d crossings_full=%0d crossings_empty=%0d ",
+                               "concurrent_at_1=%0d concurrent_at_depth_m1=%0d concurrent_other=%0d leftover=%0d"},
                               n_writes, n_reads, n_mismatch, n_overflow, n_underflow, n_unknown,
-                              max_fill, min_fill, model.size()), UVM_LOW)
+                              max_fill, min_fill, n_full_x, n_empty_x,
+                              n_conc_at_one, n_conc_at_depth_m1, n_conc_other, model.size()), UVM_LOW)
   endfunction
 endclass

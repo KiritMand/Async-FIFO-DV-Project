@@ -66,8 +66,9 @@ help: ## [M0] List targets and variables
 # ---- Shared by the RTL flows below.
 # -Werror-USERERROR keeps the RTL's parameter guards fatal in every Verilator build (toolchain T7).
 VLT_GUARD  := -Werror-USERERROR
-# Variables for the printed repro line: sizes, plus any RTL override given on the command line.
-REPRO_VARS  = ASIZE=$(ASIZE) DSIZE=$(DSIZE)$(if $(filter command line,$(origin RTL_DIR)), RTL_DIR=$(RTL_DIR))$(if $(filter command line,$(origin DUT_SRCS)), DUT_SRCS='$(DUT_SRCS)')
+# Variables for the printed repro line: sizes, plus any RTL or OUT override given on the command
+# line (an RTL variant built into its own OUT must rerun there, not over the default runs).
+REPRO_VARS  = ASIZE=$(ASIZE) DSIZE=$(DSIZE)$(if $(filter command line,$(origin RTL_DIR)), RTL_DIR=$(RTL_DIR))$(if $(filter command line,$(origin DUT_SRCS)), DUT_SRCS='$(DUT_SRCS)')$(if $(filter command line,$(origin OUT)), OUT=$(OUT))
 # Illegal sizes the RTL guards must reject (spec §2), as ASIZE:DSIZE:<parameter whose guard fires>.
 # lint checks them in Verilator, synth in Yosys; each must fail with that guard's own message.
 GUARD_CASES = 1:4:ASIZE 4:0:DSIZE

@@ -156,7 +156,8 @@ IDs are `DEC-NNN`; cite them from code comments and other docs.
 ## DEC-008 — How the testbench drives `winc`/`rinc` and treats the flags
 
 - **Date:** 2026-11-24
-- **Status:** APPROVED (owner, 2026-11-24, M3 kickoff, as part of the `fifo_env_cfg` knobs)
+- **Status:** APPROVED (owner, 2026-11-24, M3 kickoff, as part of the `fifo_env_cfg` knobs) — noted
+  in `docs/PROJECT_PLAN.md` M3 step 2 (plan v1.5)
 - **Options:**
   1. Drivers decide from the flag value in the class: read `wfull` right after the edge and
      drive through a clocking block. Reading a DUT output from a class in the edge's own time
@@ -177,3 +178,40 @@ IDs are `DEC-NNN`; cite them from code comments and other docs.
   - Monitors sample through `#1step` clocking blocks: exactly the values the DUT saw (spec §5).
   - `fifo_env_cfg` draws categories with `dist` and numbers procedurally (toolchain T10); the
     approved distributions are unchanged.
+
+## DEC-009 — M4 stimulus parameters and stimulus self-checks
+
+- **Date:** 2026-11-24
+- **Status:** APPROVED (owner, 2026-11-24: D1–D3 at the M4 kickoff; the thrash divisor and
+  length revised the same day after measurement) — recorded in `ip/async_fifo/docs/vplan.md`
+  §2.2 (v0.2)
+- **Options and choices:**
+  1. **D1, integer-ratio share in the thrash tests.** Keep the approved 20% everywhere, or use
+     50% in `thrash_full_test` and `thrash_empty_test` only. *Choice: 50% in the thrash tests.*
+     Coincident edges, needed for F16 (accepted write and read in the same time step at fill 1
+     and DEPTH−1), exist only at integer ratios with aligned phase. It is implemented as a
+     `+KIND`-style override (`fifo_env_cfg.int_pct`), so the solver needs nothing new.
+  2. **D2, sequence parameters.** k (blocked attempts before stopping) uniform 2–4; 4–6 rounds
+     for fill-to-full and drain-to-empty (the boundary half at 100% with the flag ignored, the
+     other half at the cfg's rate and flag policy); `random_rates` 4–8 phases of 2·DEPTH to
+     8·DEPTH slower-clock cycles, per-side rate 0% (weight 25), 100% (25), [10, 90]% (50), then
+     top-up phases until S5 is met; `random_mix` 4–8 short-form picks, then more until S5.
+     Thrash: the slow side's effective rate is 1/d of the fast side's full rate.
+     *Approved first as d ∈ [K+1, 2K+2] = [4, 8] and 4·DEPTH operations; revised to
+     **d ∈ [2K+1, 2K+4] = [7, 10]** and **max(4·DEPTH, 64) operations**.*
+  3. **D3, stimulus self-checks that fail a run.** `F12_CAPACITY`, `DRAIN_COUNT`, `THRASH_WEAK`
+     (fewer than 20 crossings in the thrash window), `S5_SHORT` (fewer than 4·DEPTH accepted
+     reads, all tests but `smoke_test`). *Choice: all four.* They add checks; none is relaxed.
+- **Reason for the revision:** at an aligned 4:1 ratio (thrash_full; 1:4 for thrash_empty) the
+  refill lands exactly one slow-clock edge after each slow-side operation, so a crossing needs
+  a gap of at least two slow edges, and the expected count is 2·n_ops·(1 − (K+1)/d). Measured
+  over 200 seeds each in that configuration: d = 4 gave 2–3 crossings (always THRASH_WEAK),
+  d = 5 failed 13–19% of runs, d = 6 failed 0–1%, d = 7 and 8 never failed (minimum 27 and
+  33; means within 2.5% of the formula). The configuration is ~5% of thrash runs, so [4, 8]
+  would have failed 1–2 sign-off runs per thrash test on stimulus alone. The 64-operation
+  floor keeps the same margin when M9 builds smaller FIFOs (DEPTH = 8 would give only 32).
+- **Consequences:**
+  - At DEPTH = 16 nothing changes but d. A `+THRASH_D=<d>` plusarg forces d for directed
+    closure and reproduction.
+  - Aligned integer runs still put an accepted write and read in the same step at the boundary
+    in about (K+1)/d ≈ 40–57% of slow-side operations, which is the F16 stimulus.

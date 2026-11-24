@@ -9,6 +9,7 @@ class wr_item extends uvm_sequence_item;
   data_t        data;            // wdata for the attempt
   int unsigned  idle   = 0;      // edges with no request before the attempt
   flag_policy_e policy = FLAG_CFG;  // how the attempt treats wfull
+  bit           nop    = 0;      // 1: only wait `idle` edges, no attempt (timed phases, M4)
 
   // Observed (driver response, or monitor sample at one edge).
   op_status_e   status = OP_IDLE;  // accepted, blocked, gated (driver only) or idle

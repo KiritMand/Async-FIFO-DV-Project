@@ -55,6 +55,10 @@ class fifo_env_cfg extends uvm_object;
   int unsigned ovr_wclk_ps, ovr_rclk_ps, ovr_phase_ps, ovr_gap;
   bit has_phase, has_gap;
 
+  // Integer-ratio share set by a test before randomize_all() (owner decision M4/D1: 50% in the
+  // thrash tests, so coincident edges for F16 are common). 0 = the approved 20% dist in c_kind.
+  int unsigned int_pct = 0;
+
   // ---- Fixed settings (owner-approved defaults).
   int unsigned clk_start_ps      = 1000;   // wclk's first rising edge; no clock edge at time 0
   int unsigned timeout_cycles    = 20000;  // watchdog in cycles of the slower clock (+TIMEOUT_CYCLES)
@@ -161,6 +165,13 @@ class fifo_env_cfg extends uvm_object;
       end
       has_bucket = 1; ovr_bucket = b;
       has_kind = 1; ovr_kind = is_int_ratio(ovr_wclk_ps, ovr_rclk_ps);
+    end
+
+    // A test's integer-ratio share: drawn here as an override, so the solver needs nothing new
+    // (toolchain T10 covers constant dist weights only). +KIND or both periods still win.
+    if (int_pct != 0 && !has_kind) begin
+      has_kind = 1;
+      ovr_kind = ($urandom_range(99, 0) < int_pct);
     end
 
     if (this.randomize() != 1) begin
