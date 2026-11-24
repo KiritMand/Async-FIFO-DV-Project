@@ -48,7 +48,7 @@ define stub
 endef
 
 .DEFAULT_GOAL := help
-.PHONY: help lint synth smoke sim regress cov formal bugs mcy results clean
+.PHONY: help lint synth smoke vplan sim regress cov formal bugs mcy results clean
 
 # Self-documenting help: lists every rule that has a "## " description, plus variables.
 help: ## [M0] List targets and variables
@@ -136,6 +136,16 @@ smoke: ## [M1] Directed smoke test at RATIO="1:3 3:1" (wclk:rclk periods); TRACE
 	    exit 1; fi; \
 	done
 	@echo "smoke PASS at RATIO=\"$(RATIO)\"   repro: make smoke RATIO=\"$(RATIO)\" $(REPRO_VARS)"
+
+# Verification-plan traceability (M2): the plan's structure must pass; the self-test proves the
+# checker still fails on broken plans; --trace reports which planned names exist in code yet.
+VPLAN      = $(IP_ROOT)/docs/vplan.md
+VPLAN_CHK  = python3 $(COMMON)/scripts/vplan_check.py --vplan $(VPLAN)
+vplan: ## [M2] Check docs/vplan.md structure, self-test the checker, report code traceability
+	$(VPLAN_CHK) --structure
+	VPLAN=$(VPLAN) python3 -m unittest discover -s $(COMMON)/scripts/tests -q
+	$(VPLAN_CHK) --trace --root $(IP_ROOT) --root $(COMMON)
+	@echo "vplan PASS   repro: make vplan"
 
 # One UVM test at one seed; delegates to the simulator layer in common/sim/<SIM>.mk.
 sim: ## [M3] One UVM test: TEST=<t> SEED=<s> SIM=<sim>

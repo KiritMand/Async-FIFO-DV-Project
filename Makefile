@@ -4,7 +4,7 @@
 # Which block to drive (future projects add ip/<name>/), and the targets every block offers.
 IP      ?= async_fifo
 IPS     := $(notdir $(wildcard ip/*))
-TARGETS := help lint synth smoke sim regress cov formal bugs mcy results clean
+TARGETS := help lint synth smoke vplan sim regress cov formal bugs mcy results clean
 
 .DEFAULT_GOAL := help
 .PHONY: $(TARGETS) clean-all tools-smoke

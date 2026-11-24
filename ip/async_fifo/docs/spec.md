@@ -1,6 +1,6 @@
 # async_fifo — Behavioral specification
 
-**Version** 1.0 · **Date** 2026-11-22 · **Status** APPROVED (owner, 2026-11-22) ·
+**Version** 1.1 · **Date** 2026-11-22 · **Status** APPROVED (owner, 2026-11-22; v1.1 reset scope per DEC-007) ·
 **RTL** `rtl/async_fifo.sv`, baseline tag `rtl-v1` (written by Claude in FAST MODE, 2026-11-22; lint, synth and smoke clean)
 
 This document is the contract every checker is written against: the scoreboard (M3), the
@@ -9,7 +9,7 @@ assertions (M6), the formal properties (M7), and the judgments on planted bugs a
 settled explicitly. Checkers never silently follow the RTL.
 
 Requirement IDs (`F01…`) are assigned in `docs/vplan.md` (M2). Assumption IDs (`A01…`) match
-the draft ledger in plan M2. Paths are relative to `ip/async_fifo/`.
+the assumption ledger in `docs/vplan.md` §5. Paths are relative to `ip/async_fifo/`.
 
 ---
 
@@ -185,6 +185,8 @@ the flag register changes K.
 - **A01.** Both resets are asserted together at time 0 (power-up). After that they may be
   released at different times, in either order. A side that is out of reset sees the other
   side's pointer as zero, which is correct, because that pointer is zero.
+- **A05.** Power-up is the only reset: once a reset has been released, it stays released
+  (DEC-007).
 
 Register values while each reset is asserted:
 
@@ -195,8 +197,8 @@ Register values while each reset is asserted:
 
 - **Memory.** The memory is not reset, and its contents after reset are unspecified. Nobody
   can observe them, because `rempty = 1` until an entry has been written.
-- **Out of scope.** Asserting either reset on its own after time 0, i.e. independent resets
-  in the middle of operation (roadmap E4). Behavior is undefined.
+- **Out of scope.** Any reset after power-up, whether one side alone or both together
+  (A05; roadmap E4). Behavior is undefined.
 
 ## 9. CDC structure
 
@@ -287,7 +289,7 @@ Later modules depend on these structural choices.
 - Almost-full or almost-empty flags, programmable thresholds, fill-level outputs.
 - Depths that are not a power of two; depth 2 (ASIZE = 1).
 - A registered read port (`rdata` from a flip-flop, with one cycle of read latency).
-- Independent or mid-operation resets (roadmap E4).
+- Any reset after power-up, independent or global (A05, DEC-007; roadmap E4).
 - Reset synchronizers. They are the integrator's job; see A02.
 - Inputs that violate setup or hold in their own domain, and X on inputs.
 - A configurable number of synchronizer stages.
@@ -316,6 +318,7 @@ Later modules depend on these structural choices.
 | 0.2 | 2026-11-22 | Claude | K = 3 with derivation (§7.4); flop count before/after optimization (§10); open items updated with smoke evidence |
 | 0.3 | 2026-11-22 | Claude | DSIZE < 1 elaboration check added to §2 (M1 step 7, review finding) |
 | 1.0 | 2026-11-22 | Owner | Approved: §5 coincident-edge convention and §6 W5/R3 wording confirmed; §13 closed |
+| 1.1 | 2026-11-22 | Claude (owner decision, M2) | §8 and §12: power-up is the only reset (A05, DEC-007), so a later reset of both sides together is out of scope too; assumption IDs now point to the vplan ledger |
 
 ## Reference
 

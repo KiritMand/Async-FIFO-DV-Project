@@ -130,3 +130,25 @@ IDs are `DEC-NNN`; cite them from code comments and other docs.
   - M11 now compares single-shot LLM-drafted properties with the M6/M7 set, which Claude Code
     also writes, iteratively and with formal feedback, rather than with a human-written set.
     `ai_sva/REPORT.md` must list this under threats to validity.
+
+## DEC-007 — Power-up is the only reset
+
+- **Date:** 2026-11-22
+- **Status:** APPROVED (owner, 2026-11-22, M2 kickoff) — applied to `ip/async_fifo/docs/spec.md`
+  v1.1 (§8, §12), `ip/async_fifo/docs/vplan.md` (ledger A05) and `docs/PROJECT_PLAN.md` M4/M7
+  (plan v1.4)
+- **Options:**
+  1. Power-up only: both resets asserted at time 0, each released on its own clock, never
+     asserted again. Formal assumes it (A05) and simulation asserts it.
+  2. Also allow a later reset of both sides together, mid-traffic. This is the stronger claim,
+     but formal then needs an assumption that both resets fall together plus a checker flush,
+     and M3/M4 need a scoreboard and monitor flush and a reset sequence.
+- **Choice:** option 1.
+- **Reason:** owner's decision. It matches the approved spec §8 (A01 at power-up) and the plan's
+  M7 reset model, and keeps the formal environment and the scoreboard simple.
+- **Consequences:**
+  - New ledger entry A05 (`asm_A05_wrst_stays_released`, `asm_A05_rrst_stays_released`): an
+    `assume` in formal and an `assert` on the testbench in simulation.
+  - Spec v1.1: any reset after power-up, on one side or both, is out of scope (roadmap E4).
+  - Plan M4's optional `vseq_global_reset` is dropped. The scoreboard needs no reset flush.
+  - The M7 assumption audit drops A05 and records the expected failure.
