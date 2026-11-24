@@ -73,11 +73,24 @@ Run on 2026-11-21 with the pinned versions above: all PASS, 765 s total (T1 211 
 | T5 | MCY `bitcnt` example end to end (`init`, `run -j4`, `status`) | MCY + Icarus + SBY | **PASS** | 1000 mutations, ~8 min at `-j4`. Run A: COVERED 901 / UNCOVERED 55 / NOCHANGE 44 → 94.25%; run B: 896 / 63 / 41 → 93.43%. Example vendored unmodified (`tools_smoke/T5_mcy/bitcnt/SOURCE.txt`). |
 | T6 | *(extra, for DEC-002)* concurrent SVA in formal | Yosys native / yosys-slang | **unsupported (as expected)** | native: `syntax error, unexpected '@'`; slang: `encountered unsupported SVA feature` — even for `a \|-> 1'b1`. T6 PASSes while this holds and FAILs if support appears. |
 | T7 | *(M1, 2026-11-22)* elaboration-time parameter guard: `if (ASIZE < 2) begin : g $error("..."); end` | Verilator, Yosys native | **PASS, with a caveat** | Yosys (`chparam` and `hierarchy -chparam`): `ERROR: ...`, exit 1. Verilator: only **warning** `USERERROR`; exit 1 only because warnings are fatal by default — `-Wno-fatal` lets ASIZE=1 through (exit 0). `-Werror-USERERROR` makes it a hard error even with `-Wno-fatal`. `$fatal` is no better (warning `USERFATAL`). Yosys prints `%0d` format specs verbatim, so the message carries no value. |
+| T8 | *(M3, 2026-11-24)* clocking blocks as the UVM agents use them: `default input #1step` sampling, `default output #0` drives, a combinational gate `inc = req & ~(gate & full)` on a registered DUT output, class access through a virtual interface, clock process owned by the interface and started by a class call | Verilator `--timing` | **PASS** | `#1step` gives the pre-edge value at every edge; a drive executed right after `@(cb)` changes the signal in that edge's time step and is first sampled at the next edge; the gate falls in the same time step as `full` rises, and the DUT still accepts that edge's push (exactly 2 accepted, 0 blocked with the gate on, 4 blocked with it off). Negative check: with `input #0` the monitor sees post-edge values (count off by one at 10 edges), so the test is sensitive. |
+| T9 | *(M3, 2026-11-24)* reset asserted at time 0 with random register init (`--x-initial unique`, `+verilator+rand+reset+2`) | Verilator `--timing` | **PASS** | Style A (`logic r = 1; initial r = 0;`) and style B (same, `initial #0 r = 0;`) fire the async reset on all 6 seeds. Style C (no initializer, `initial r = 0;`) misses it on 3 of 6 seeds: random init sometimes starts `r` at 0, so there is no negedge. Random init differs per seed. |
+| T10 | *(M3, 2026-11-24)* constrained-random distributions for `fifo_env_cfg`: `dist` weights, period-ratio constraints, inline `randomize() with` | Verilator (external SMT solver) | **PASS, with a caveat** | `dist` weights are honored (bucket 19–21% each, integer share 19%, gap classes on target over 2000 draws) and `with {}` works. **Values without a `dist` are not spread evenly** when other constraints involve them: the first run, with `b inside {[0:4]}` and no `dist`, gave buckets 72/12/2/0/14%; T_wclk lands below its midpoint 34% of the time instead of 50%, even with `dist {[lo:hi] :/ 1}`. About 20 ms per `randomize()`. |
 
 ## Findings that affect later modules
 
-- **Build once, run many (M3/M5).** A UVM build is ~4 min and ~0.9 GB; a run is under a second.
-  `regress.py` must build once per configuration and fan out seeds. Memory is not the limit at `-j 8`.
+- **Build once, run many (M3/M5).** A UVM build takes minutes; a run takes about a second.
+  `regress.py` must build once per configuration and fan out seeds.
+- **UVM build memory (M3).** Verilator groups the generated C++ into unity files
+  (`*_vm_classes_*.cpp`); for the full FIFO testbench each one takes ~45 s and peaks at 1.2 GB.
+  Eight compile jobs need ~9 GB on this 8 GB host: the first M3 build swapped and took 96 min
+  (4 h of system time). `common/sim/verilator.mk` therefore sets `--build-jobs` from free memory
+  (1.5 GB per job, at most `J`) and keeps `--verilate-jobs $(J)`. T1's bare UVM build was small
+  enough that `-j 8` happened to fit.
+- **Make variables leak into Verilator's build (M3).** A command-line variable such as `DEPS=`
+  reaches Verilator's generated makefile through `MAKEFLAGS`; `verilated.mk` uses `DEPS`
+  internally (the `.d` files it includes), so the build died with "missing separator" in a `.sv`
+  file. The sim layer runs Verilator under `env -u MAKEFLAGS -u MAKEOVERRIDES -u MFLAGS`.
 - **Covergroups (M5).** `cg.get_coverage()` works; `cg.<coverpoint|cross>.get_coverage()` is
   *unsupported* in this Verilator — use `get_inst_coverage()` for per-point numbers. Sample
   covergroups explicitly with `sample()`: a clocked covergroup also samples reset/idle values,
@@ -120,3 +133,24 @@ Run on 2026-11-21 with the pinned versions above: all PASS, 765 s total (T1 211 
   `wq1_rptr` (one-stage synchronizer) failed the smoke build with `UNUSEDSIGNAL 'wq2_rptr'`.
   With that warning waived, smoke *passes* it (wfull latency 2 < K = 3 is legal), so lint is
   the only M1 check that sees this bug. This is useful for M8's detection matrix.
+- **Clocking blocks (M3, T8).** `default input #1step output #0` behaves as IEEE 1800 says:
+  monitors see the values the DUT sampled, and a drive executed right after `@(cb)` reaches the
+  DUT one edge later. A continuous `assign` gating a TB request with a registered DUT output
+  (`winc = req & ~(wfull & ...)`) is race-free. `input #0` would sample post-edge values instead.
+  Under `-Wall` every clocking-block signal is reported UNDRIVEN/UNUSEDSIGNAL (false positives),
+  so the UVM build uses Verilator's default warning set (still fatal), like T1; the RTL keeps its
+  own `-Wall` lint in `make lint`.
+- **ZERODLY is a default warning (M3, T8).** A run-time delay such as `#(period / 2)` fails the
+  build even without `-Wall`. Clock generators waive it locally (`lint_off ZERODLY`) with a
+  comment saying why the delay is never 0, as in M1.
+- **Power-up reset at time 0 (M3, T9).** Declare the reset with initializer 1 and drive it to 0
+  at time 0 (`initial #0 rst_n = 1'b0;`). With random register init a reset that merely starts
+  at 0 has no negedge, so async-reset flops keep their random values until the first clock edge
+  (3 of 6 seeds in T9). `#0` also avoids the time-0 race in event-driven simulators.
+- **Randomization (M3, T10).** Use `dist` for every categorical choice whose share matters, and
+  draw numbers that must be uniform inside a range procedurally (`$urandom_range`) after the
+  categories are fixed. No simulator would give the plan's distribution otherwise: IEEE 1800 asks
+  solvers to spread over all legal *combinations*, which favors buckets with more legal periods,
+  and Verilator's solver is also uneven inside a range (T10).
+- **Quiet runs.** `+verilator+quiet` suppresses Verilator's end-of-run report (wall time, speed),
+  the only part of a run log that differs between two identical runs.

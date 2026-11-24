@@ -1,0 +1,25 @@
+# verilator.patterns — pass/fail rules for Verilator + UVM run logs (TOML), read by
+# common/scripts/simlog.py. Regexes use Python syntax and are matched against each log line.
+
+# Any matching line fails the run: Verilator run-time errors, failed immediate or concurrent
+# assertions (toolchain T3), and UVM error/fatal messages. The `(?!:)` keeps the report-summary
+# count lines ("UVM_ERROR :    0") out; those are checked by `zero` below.
+fail = [
+  '^%Error',
+  'Assertion failed in',
+  '^UVM_FATAL (?!:)',
+  '^UVM_ERROR (?!:)',
+]
+
+# Each must appear at least once, or the run died early: the UVM report summary, and the marker
+# every base test prints in report_phase ("TB_DONE test=<name>").
+require = [
+  '^--- UVM Report Summary ---',
+  '^TB_DONE ',
+]
+
+# One capture group each; every captured count must be 0, and the line must exist.
+zero = [
+  '^UVM_ERROR\s*:\s*(\d+)',
+  '^UVM_FATAL\s*:\s*(\d+)',
+]

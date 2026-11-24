@@ -152,3 +152,28 @@ IDs are `DEC-NNN`; cite them from code comments and other docs.
   - Spec v1.1: any reset after power-up, on one side or both, is out of scope (roadmap E4).
   - Plan M4's optional `vseq_global_reset` is dropped. The scoreboard needs no reset flush.
   - The M7 assumption audit drops A05 and records the expected failure.
+
+## DEC-008 — How the testbench drives `winc`/`rinc` and treats the flags
+
+- **Date:** 2026-11-24
+- **Status:** APPROVED (owner, 2026-11-24, M3 kickoff, as part of the `fifo_env_cfg` knobs)
+- **Options:**
+  1. Drivers decide from the flag value in the class: read `wfull` right after the edge and
+     drive through a clocking block. Reading a DUT output from a class in the edge's own time
+     step is a race (old or new value), so `respect_full = 1` could not promise zero blocked
+     writes.
+  2. Drive on the falling edge (plan M3 step 2 fallback). Race-free, but inputs then change
+     between rising edges, so the simulation check for ledger A03 could never be enabled.
+  3. Clocking-block drives at the rising edge, plus a combinational stage in each interface:
+     `winc = !wrst_n ? noise : req & ~(wfull & ~ignore_full)` (and the mirror for `rinc`).
+- **Choice:** option 3.
+- **Reason:** it models real producer/consumer logic (`winc = want & ~wfull`), is race-free
+  (toolchain T8), keeps every input change in the time step of its own rising edge (A03-sim
+  stays possible), and stops the in-reset noise (vplan S3) exactly at the release edge.
+- **Consequences:**
+  - `respect_full = 1` means no blocked write is ever presented; `respect_full = 0` lets each
+    attempt ignore `wfull` with probability `blocked_attempt_pct` (same for reads). A gated
+    attempt is reported as `OP_GATED` and is not a DUT event.
+  - Monitors sample through `#1step` clocking blocks: exactly the values the DUT saw (spec §5).
+  - `fifo_env_cfg` draws categories with `dist` and numbers procedurally (toolchain T10); the
+    approved distributions are unchanged.

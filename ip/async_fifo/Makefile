@@ -147,9 +147,29 @@ vplan: ## [M2] Check docs/vplan.md structure, self-test the checker, report code
 	$(VPLAN_CHK) --trace --root $(IP_ROOT) --root $(COMMON)
 	@echo "vplan PASS   repro: make vplan"
 
-# One UVM test at one seed; delegates to the simulator layer in common/sim/<SIM>.mk.
-sim: ## [M3] One UVM test: TEST=<t> SEED=<s> SIM=<sim>
-	$(call stub,M3,make -f $(COMMON)/sim/$(SIM).mk TEST=$(TEST) SEED=$(SEED) -> $(OUT)/run/$(TEST)_$(SEED)/)
+# ---- UVM testbench (M3): sources in compile order (interfaces and packages, then DUT, then top);
+# every testbench file is a rebuild dependency. UVM_HOME: the pinned UVM (docs/toolchain.md).
+UVM_HOME   ?= $(HOME)/tools/uvm-2020-3.2/src
+TB_DIR      = $(IP_ROOT)/tb/uvm
+TB_PRE      = $(COMMON)/uvm/clk_rst_if.sv $(TB_DIR)/pkg/fifo_params_pkg.sv $(TB_DIR)/if/fifo_wr_if.sv \
+              $(TB_DIR)/if/fifo_rd_if.sv $(TB_DIR)/pkg/fifo_tb_pkg.sv
+TB_INCDIRS  = $(addprefix $(TB_DIR)/,agents/wr agents/rd env seq tests)
+TB_DEPS     = $(shell find $(TB_DIR) $(COMMON)/uvm -name '*.sv' -o -name '*.svh') $(COMMON)/sim/$(SIM).mk
+# One build per simulator, size and RTL source list, so M8/M9 builds of patched RTL coexist.
+BUILD_TAG   = $(SIM)_a$(ASIZE)_d$(DSIZE)_$(shell echo '$(DUT_SRCS)' | md5sum | cut -c1-8)
+PLUSARGS   ?=
+
+# One UVM test at one seed: build once per configuration, run in out/.../run/<test>_<seed>/,
+# judge the log, print the reproduction command. Delegates to common/sim/<SIM>.mk.
+sim: ## [M3] One UVM test: TEST=<t> SEED=<s> SIM=<sim> [PLUSARGS='+X=1 ...']; +trace for VCD
+	@test -n "$(TEST)" || { echo "make sim: TEST=<test> is required, e.g. TEST=smoke_test" >&2; exit 2; }
+	@test "$(SEED)" -ge 1 2>/dev/null || { echo "make sim: SEED must be an integer >= 1" >&2; exit 2; }
+	@$(MAKE) --no-print-directory -f $(COMMON)/sim/$(SIM).mk run \
+	  TOP=tb_top SRCS="$(TB_PRE) $(DUT_SRCS) $(TB_DIR)/top/tb_top.sv" INCDIRS="$(TB_INCDIRS)" \
+	  DEFINES="FIFO_ASIZE=$(ASIZE) FIFO_DSIZE=$(DSIZE)" DEPS="$(TB_DEPS) $(DUT_SRCS)" \
+	  BUILD_DIR=$(OUT)/build/$(BUILD_TAG) RUN_DIR=$(OUT)/run/$(TEST)_$(SEED) \
+	  TEST=$(TEST) SEED=$(SEED) PLUSARGS="$(PLUSARGS)" J=$(J) UVM_HOME=$(UVM_HOME) \
+	  REPRO="make sim TEST=$(TEST) SEED=$(SEED) SIM=$(SIM) $(REPRO_VARS)$(if $(PLUSARGS), PLUSARGS='$(PLUSARGS)')"
 
 # Many tests x many seeds in parallel, driven by regress/tests.toml (sign-off SO-2).
 regress: ## [M5] Parallel regression from regress/tests.toml
