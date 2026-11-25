@@ -8,10 +8,13 @@ Modes:
                checker, and coverage or formal; every label, coverage item and test is defined
                once and referenced from its home row; the ledger and sign-off are filled in.
   --trace      look for every planned label, covergroup, test and target in the code and
-               report what exists. Report-only unless --strict (strict from M6 on).
+               report what exists. Report-only unless --strict (strict from M6 on). With
+               --defer formal, labels whose Runs is `formal` are reported as deferred and are
+               not required yet (M6: the formal-only labels arrive in M7).
   --annotate   write docs/vplan_status.md: the merged coverage of the last regression
                (functional.json from regress.py) per vplan coverage item and per feature, the
-               regression result, and what is still pending (cover properties M6, formal M7).
+               regression result, the simulation cover properties (functional.json "covers"),
+               and what is still pending (formal M7).
                With --strict it fails on any hole, any planned item missing from the coverage
                database, or a bin count that differs from the plan's stated total.
 
@@ -531,8 +534,9 @@ def make_target_real(makefile: Path, target: str) -> bool:
 
 
 # Look up every planned name in the code; print one summary line per category and, with
-# --verbose, the missing names. Returns the number of required-but-missing items and orphans.
-def run_trace(mdl: Model, roots: list[Path], makefile: Path, verbose: bool) -> int:
+# --verbose, the missing names. Labels whose Runs value is in `defer` are not required yet.
+# Returns the number of required-but-missing items and orphans.
+def run_trace(mdl: Model, roots: list[Path], makefile: Path, verbose: bool, defer: set[str] = frozenset()) -> int:
     code = load_code(roots)
     checks: dict[str, list[tuple[str, bool]]] = {k: [] for k in
                                                 ("labels", "coverage", "tests", "code", "make", "scripts")}
@@ -558,19 +562,23 @@ def run_trace(mdl: Model, roots: list[Path], makefile: Path, verbose: bool) -> i
     orphans = sorted({m.group(1) for t in code.values()
                       for m in re.finditer(r"\b((?:ast|asm|cov)_[FA]\d{2}_[a-z0-9_]+)\s*:", t)}
                      - defined)
+    deferred = {lab for lab, r in mdl.props.items() if r["Runs"] in defer}
     missing_required = 0
     parts = []
     for cat, rows in checks.items():
         hits = sum(ok for _, ok in rows)
         opt = sum(1 for n, ok in rows if not ok and n in mdl.optional_tokens)
-        missing_required += len(rows) - hits - opt
-        parts.append(f"{cat} {hits}/{len(rows)}" + (f" ({opt} optional missing)" if opt else ""))
+        dfr = sum(1 for n, ok in rows if not ok and n in deferred and n not in mdl.optional_tokens)
+        missing_required += len(rows) - hits - opt - dfr
+        parts.append(f"{cat} {hits}/{len(rows)}" + (f" ({opt} optional missing)" if opt else "")
+                     + (f" ({dfr} deferred: Runs = {'/'.join(sorted(defer))})" if dfr else ""))
     print("vplan_check --trace: " + ", ".join(parts) + f"; orphan labels in code: {len(orphans)}")
     if verbose:
         for cat, rows in checks.items():
             for name, ok in rows:
                 if not ok:
-                    tag = "optional" if name in mdl.optional_tokens else "missing"
+                    tag = ("optional" if name in mdl.optional_tokens else
+                           "deferred" if name in deferred else "missing")
                     print(f"  {tag:8} {cat:8} {name}")
     for o in orphans:
         print(f"  orphan   label    {o} (in code, not in the vplan)")
@@ -657,9 +665,19 @@ def run_annotate(vp: Vplan, mdl: Model, cov_path: Path, results_path: Path | Non
         else:
             hit_c = sum(1 for c in sim_covers if covers.get(c, 0) > 0)
             pstat = f"{hit_c}/{len(sim_covers)} hit" + ("" if hit_c == len(sim_covers) else " — **MISSED**")
-            problems += len(sim_covers) - hit_c
         formal = "n/a" if is_na(r["Formal"]) else "pending (M7)"
         feats.append(f"| {fid} | {cstat} | {pstat} | {formal} |")
+    # SO-1 cover properties: every simulation cover of the plan (Runs = sim or both), listed in a
+    # feature or not, must be hit at least once (vplan §7). Excluded ones (vplan §8) don't count.
+    all_covers = [p for p, r in mdl.props.items()
+                  if p.startswith("cov_") and r["Runs"] in ("sim", "both") and p not in excluded]
+    if covers is None:
+        so1c = "pending (M6)"
+    else:
+        missed_c = [c for c in all_covers if covers.get(c, 0) == 0]
+        problems += len(missed_c)
+        so1c = (f"{len(all_covers) - len(missed_c)}/{len(all_covers)} simulation covers hit"
+                + (f" — **MISSED:** {', '.join(f'`{c}`' for c in missed_c)}" if missed_c else ""))
     # Regression result, if given.
     reg = "No regression results given."
     if results_path and results_path.is_file():
@@ -688,7 +706,7 @@ def run_annotate(vp: Vplan, mdl: Model, cov_path: Path, results_path: Path | Non
         "| ID | Status |",
         "|---|---|",
         f"| SO-1 coverage model | {so1} |",
-        f"| SO-1 cover properties | {'pending (M6)' if covers is None else 'see features'} |",
+        f"| SO-1 cover properties | {so1c} |",
         f"| SO-2 regression | {reg} |",
         "| SO-3 formal | pending (M7) |",
         "",
@@ -735,6 +753,8 @@ def main(argv: list[str] | None = None) -> int:
                                                   "(default: <first root>/Makefile)")
     ap.add_argument("--strict", action="store_true", help="--trace fails on anything missing; "
                                                        "--annotate fails on any hole")
+    ap.add_argument("--defer", action="append", default=[], choices=sorted(RUNS),
+                    help="--trace: labels with this Runs value are not required yet (repeatable)")
     ap.add_argument("-v", "--verbose", action="store_true", help="list missing names")
     args = ap.parse_args(argv)
     raw = list(argv) if argv is not None else sys.argv[1:]
@@ -771,7 +791,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         roots = args.root or [args.vplan.resolve().parent.parent]
         makefile = args.makefile or roots[0] / "Makefile"
-        bad = run_trace(mdl, roots, makefile, args.verbose)
+        bad = run_trace(mdl, roots, makefile, args.verbose, set(args.defer))
         if args.strict and bad:
             print(f"vplan_check --trace --strict: FAIL, {bad} missing or orphan item(s)   {repro}")
             rc = 1

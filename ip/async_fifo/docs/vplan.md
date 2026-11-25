@@ -1,6 +1,6 @@
 # async_fifo — Verification plan
 
-**Version** 0.3 · **Date** 2026-11-24 · **Status** DRAFT: owner decisions applied (feature-table
+**Version** 0.4 · **Date** 2026-11-24 · **Status** DRAFT: owner decisions applied (feature-table
 edits, power-up-only resets, N = 200); full text awaiting owner review ·
 **Spec** [`spec.md`](spec.md) v1.1 · **RTL** `rtl/async_fifo.sv`, tag `rtl-v1`
 
@@ -27,7 +27,7 @@ rules (§1.3). Paths are relative to `ip/async_fifo/`.
 | Method | Code | Module | Evidence |
 |---|---|---|---|
 | UVM simulation, Verilator (DEC-001) | `tb/uvm/` | M3–M5 | regression summary, merged functional coverage |
-| Assertions in simulation | `sva/async_fifo_e2e_props.sv`, `rtl/async_fifo_props.svh` | M6 | regression with every assertion enabled |
+| Assertions in simulation | `sva/async_fifo_e2e_props.sv`, `rtl/async_fifo_props.svh`; concurrent twins `sva/async_fifo_sva_concurrent.sv` (simulation only) | M6 | regression with every assertion enabled; negative tests `docs/sva_negative_tests.md` (`make sva-neg`) |
 | Formal: SBY, two clocks, k-induction (DEC-002) | `formal/async_fifo.sby` | M7 | prove and cover logs |
 | Planted bugs | `bugs/` | M8 | `docs/bug_matrix.md` |
 | Mutation testing, MCY | `mcy/` | M9 | `docs/mutation_report.md` |
@@ -254,7 +254,7 @@ That is how the simulation checks every formal assumption on the testbench's own
 | `cov_F17_write_during_rd_reset` | e2e | both | wclk | A write is accepted while `rrst_n = 0`. |
 | `cov_F17_rd_released_first` | e2e | both | rclk | `rrst_n = 1` while `wrst_n = 0`. |
 | `cov_F17_full_before_rd_release` | e2e | both | wclk | Fill reaches DEPTH while `rrst_n = 0`. |
-| `asm_A01_resets_low_at_start` | e2e | both | init | Both resets are 0 in the initial state (simulation: at the first rising edge of each clock). |
+| `asm_A01_resets_low_at_start` | e2e | both | init | Both resets are 0 in the initial state (simulation: at the first rising edge of either clock). |
 | `asm_A02_wrst_release_on_wclk` | e2e | both | gclk | `wrst_n` rises only together with a rising `wclk` edge. |
 | `asm_A02_rrst_release_on_rclk` | e2e | both | gclk | `rrst_n` rises only together with a rising `rclk` edge. |
 | `asm_A03_w_inputs_after_wclk` | e2e | both | gclk | `winc` and `wdata` change only in the step right after a rising `wclk` edge. |
@@ -270,6 +270,44 @@ M8 shows each assertion failing at least once. M7 adds induction invariants (whi
 `ifdef FORMAL`) on top of this list. Those are proof aids, not spec checks, and need no vplan
 row.
 
+**As built (M6).**
+- **Files.** `sva/async_fifo_e2e_props.sv`: 8 assertions, 15 covers and the simulation forms of
+  the 9 `asm_` checks. `rtl/async_fifo_props.svh`: 10 assertions. The simulation-only
+  `sva/async_fifo_sva_concurrent.sv` restates the 8 e2e assertions as concurrent SVA under
+  `cast_` labels (DEC-010), bound into the e2e checker. The 14 Runs = formal labels arrive in M7;
+  until then `make vplan` reports them as deferred and requires every other label.
+- **Sampling.** Each block is clocked by one DUT clock and reads signals as they were just before
+  the edge, because every register updates with a non-blocking assignment. So the true fill at a
+  `wclk` edge counts reads at strictly earlier `rclk` edges, which is the coincident-edge rule of
+  spec §5. The concurrent twins sample in the Preponed region, which gives the same view.
+- **True fill.** The e2e checker counts accepted operations modulo 2·DEPTH, the pointer width, so
+  M7 can equate the counts with the pointers. The first overflow or underflow fails F06 or F07 at
+  the edge where it is accepted, before the count can alias.
+- **F08 window.** An edge samples the flag as the previous edge left it. So "exact once no read for
+  K edges" is checked from the (K+1)-th `wclk` edge after the most recent read: that edge sees the
+  state just after the K-th (spec §7.4). `cov_F08_*_lag_k_minus_1` is sampled at the K-th edge,
+  which sees the state after the (K−1)-th. The write domain sees a read as a change of the read
+  count between two `wclk` edges (the mirror on the read side). F08 applies only while both
+  resets are released (spec §7.4). F12 applies whenever the write side is out of reset, because a
+  read side in reset holds its pointer at 0 (spec §8).
+- **History.** Each `$past` is guarded by a per-domain flag that is 1 when the previous edge was
+  out of reset. `$past` keeps history at every edge, even inside a skipped `if` (toolchain T14,
+  T15).
+- **Assumption checks in simulation** are event-driven. A01: both resets are 0 at the first rising
+  edge of either clock. A02: a reset rises in the time step of a rising edge of its own clock.
+  A03: an input changes only in such a time step, from the first edge on. A05: a reset never
+  falls after its release. A06 cannot fire in a two-state simulator.
+- **Failure messages.** In simulation each assertion's action block calls `$error` with the
+  values involved. Yosys rejects `else` on an immediate assertion (T15), so the action block is a
+  macro that is empty under `FORMAL`. `asm_` labels use one macro: `assume` under `FORMAL`,
+  `assert` otherwise.
+- **Negative tests.** `make sva-neg` breaks each of the 25 simulation assertions (18 `ast_`, 7
+  `asm_`) on purpose; each fires, and each concurrent twin fires with its immediate twin
+  (`docs/sva_negative_tests.md`). A06 has no case.
+- **Where they run.** The UVM bench and the negative-test bench carry everything. `tb/smoke`
+  carries the white-box properties only: it drives at falling edges, which the A02/A03 checks
+  would reject.
+
 ---
 
 ## 5. Assumption ledger
@@ -281,7 +319,7 @@ an assertion on the testbench (§4, `asm_`). Adding or changing a row needs the 
 
 | ID | Assumption | Why it is realistic | Formal | Simulation | Status |
 |---|---|---|---|---|---|
-| A01 | Both resets are asserted (0) together at time 0 (power-up). | One power-on reset source feeds both reset synchronizers (spec §8). | `asm_A01_resets_low_at_start` (initial state) | `asm_A01_resets_low_at_start`, asserted at the first rising edge of each clock | active |
+| A01 | Both resets are asserted (0) together at time 0 (power-up). | One power-on reset source feeds both reset synchronizers (spec §8). | `asm_A01_resets_low_at_start` (initial state) | `asm_A01_resets_low_at_start`: both resets are 0 at the first rising edge of either clock (DEC-010) | active |
 | A02 | Each reset is released synchronously to its own clock: `wrst_n` rises only with a rising `wclk` edge, `rrst_n` only with a rising `rclk` edge. | Reset synchronizers (asynchronous assert, synchronous release) are the integrator's job (spec §8). | `asm_A02_wrst_release_on_wclk`<br>`asm_A02_rrst_release_on_rclk` | `asm_A02_wrst_release_on_wclk`<br>`asm_A02_rrst_release_on_rclk`: each rising reset edge must fall in the time step of a rising edge of its clock | active |
 | A03 | `winc`/`wdata` change only in the formal step right after a rising `wclk` edge; `rinc` likewise for `rclk`. | Inputs come from flops on their own clock (spec §3). The DUT samples them only at rising edges and has no combinational path from input to output, so changes between edges are invisible to it. The assumption only shrinks traces. | `asm_A03_w_inputs_after_wclk`<br>`asm_A03_r_inputs_after_rclk` (adopted only if M7 needs it) | `asm_A03_w_inputs_after_wclk`<br>`asm_A03_r_inputs_after_rclk`: inputs change only in the time step of a rising edge of their own clock (requires drivers that drive at that edge, M3) | optional |
 | A04 | Clocks are unconstrained: any interleaving of rising edges, including coincident edges and arbitrarily long gaps. | Strictly more general than any real pair of clocks, and enough for safety properties (no fairness needed). | n/a: no constraint; `wclk` and `rclk` are free inputs sampled every formal step. The F15 covers show the freedom is real. | n/a: simulated clocks (1:4 to 4:1) are a subset | modeling |
@@ -391,3 +429,4 @@ From spec §12, plus limits of the methods used:
 | 0.1 | 2026-11-22 | Claude | First draft (M2). Owner decisions applied: F01 adds W3/R5; F09(a) adds spec C4; F11 gets formal and `make synth` checks; F16 restricted to fill 1 and DEPTH−1; F17 added (reset release order); power-up-only resets (A05, DEC-007); N = 200. |
 | 0.2 | 2026-11-24 | Claude | M4: §2.2 test rows carry the approved stimulus parameters and their stimulus self-checks (DEC-009: 50% integer ratios in the thrash tests, thrash divisor d ∈ [7, 10] after measurement, thrash length max(4·DEPTH, 64), `S5_SHORT`). No feature, coverage or property change. |
 | 0.3 | 2026-11-24 | Claude | M5: F16 stimulus adds the directed aligned thrash entries (closure H02). §2.2 describes the directed entries, per-test seeding (H01) and the thrash reset wait (H03). §3 records how the coverage model was built (helper `cp_bucket`, `int_ratio` bin name, sampling hooks, the limit of `cp_phase`). §7 has the measured run time. No bin, check or property changed. |
+| 0.4 | 2026-11-24 | Claude | M6: properties coded. §1.2 adds the concurrent twins and the negative tests. §4: A01's simulation form is "at the first rising edge of either clock" (owner, DEC-010; the old wording fails on a legal testbench whose `rrst_n` is released before `wclk` first rises); "As built (M6)" notes (sampling, true fill, the F08 window and reset guards, history, assumption checks, failure messages, negative tests). §5 A01 Simulation cell matches. No intent weakened, no bin, check or assumption added or removed. |

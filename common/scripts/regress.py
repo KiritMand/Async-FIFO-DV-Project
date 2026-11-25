@@ -278,6 +278,16 @@ class VerilatorCoverage:
             it["ignored" if kv.get("Bt") in ("ignore", "illegal") else "bins"][bin_] = count
         return groups
 
+    # Cover statements (M6): every `t=user` record is one labeled cover; its `o` field is the
+    # label (toolchain T14). Same label in several instances adds up: {label: hits}.
+    def covers(self, records: dict[str, int]) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for key, count in records.items():
+            kv = self.fields(key)
+            if kv.get("t") == "user":
+                out[kv.get("o", "?")] = out.get(kv.get("o", "?"), 0) + count
+        return dict(sorted(out.items()))
+
     # Code coverage per source file and kind (line, branch, toggle, ...): points and points hit.
     def code(self, records: dict[str, int]) -> dict:
         files: dict[str, dict] = {}
@@ -325,10 +335,11 @@ def merge_coverage(sim: str, runs: list[Run], cov_dir: Path) -> str:
         shutil.rmtree(cov_dir)
     cov_dir.mkdir(parents=True)
     records = cov.merge(dbs, cov_dir) if dbs else {}
-    groups, files = cov.functional(records), cov.code(records)
+    groups, files, covers = cov.functional(records), cov.code(records), cov.covers(records)
     live, hit = func_totals(groups)
     meta = {"sim": sim, "merged_runs": len(dbs), "generated": now()}
-    (cov_dir / "functional.json").write_text(json.dumps({**meta, "live": live, "hit": hit, "groups": groups}, indent=1))
+    (cov_dir / "functional.json").write_text(json.dumps({**meta, "live": live, "hit": hit, "groups": groups,
+                                                         "covers": covers}, indent=1))
     (cov_dir / "code.json").write_text(json.dumps({**meta, "files": files}, indent=1))
     # Functional: one row per covergroup and item, then every hole by name.
     md = [f"### Functional coverage: {hit}/{live} live bins ({pct(hit, live)}), {len(dbs)} runs merged", "",
@@ -340,6 +351,11 @@ def merge_coverage(sim: str, runs: list[Run], cov_dir: Path) -> str:
             md.append(f"| `{gname}` | `{iname}` | {n} | {h} | {pct(h, n)} |")
             holes += [f"`{gname}.{iname}.{b}`" for b, c in sorted(it["bins"].items()) if c == 0]
     md += ["", f"**Holes ({len(holes)}):** " + (", ".join(holes) if holes else "none"), ""]
+    # Cover statements: hits per label over all merged runs, then every one never hit.
+    missed = [c for c, n in covers.items() if n == 0]
+    md += [f"### Cover statements: {len(covers) - len(missed)}/{len(covers)} hit", "",
+           "| Cover | Hits |", "|---|---|", *[f"| `{c}` | {n} |" for c, n in covers.items()], "",
+           f"**Never hit ({len(missed)}):** " + (", ".join(f"`{c}`" for c in missed) if missed else "none"), ""]
     func_md = "\n".join(md)
     # Code coverage: one row per file and kind (secondary evidence, plan M5 step 6).
     cmd = ["### Code coverage (secondary evidence)", "", "| File | Kind | Points | Hit | Coverage |", "|---|---|---|---|---|"]
@@ -352,6 +368,8 @@ def merge_coverage(sim: str, runs: list[Run], cov_dir: Path) -> str:
     (cov_dir / "code.md").write_text(code_md)
     print(f"  functional coverage: {hit}/{live} live bins ({pct(hit, live)}); holes: {len(holes)}"
           + (f" — {', '.join(h.strip('`') for h in holes[:8])}{' ...' if len(holes) > 8 else ''}" if holes else ""))
+    print(f"  cover statements: {len(covers) - len(missed)}/{len(covers)} hit"
+          + (f" — never hit: {', '.join(missed)}" if missed else ""))
     return func_md + "\n" + code_md
 
 

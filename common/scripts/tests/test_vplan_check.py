@@ -183,7 +183,8 @@ class StructureSelfTest(unittest.TestCase):
 
 # Runs --annotate --strict on synthetic merged coverage built from the real plan's items: a
 # complete database passes; a hole, a missing item or a bin count that differs from the plan's
-# stated total fails; helper items the plan doesn't list are reported but don't fail.
+# stated total fails; helper items the plan doesn't list are reported but don't fail; every
+# simulation cover property must be hit (M6).
 class AnnotateSelfTest(unittest.TestCase):
     # The plan's coverage items, in plan order, and its stated bin total.
     @classmethod
@@ -254,6 +255,44 @@ class AnnotateSelfTest(unittest.TestCase):
         rc, out, page = self.run_annotate(db)
         self.assertEqual(rc, 0, out)
         self.assertIn(f"`{g}.cp_helper`", page)
+
+    # Simulation cover properties (M6): all of the plan's hit passes; one never hit fails and is
+    # named on the page; formal-only covers are not required in simulation.
+    def test_sim_covers(self):
+        props = vplan_check.check_structure(vplan_check.Vplan(VPLAN)).props
+        sim = [p for p, r in props.items() if p.startswith("cov_") and r["Runs"] in ("sim", "both")]
+        db = {**self.database(), "covers": {c: 3 for c in sim}}
+        rc, out, page = self.run_annotate(db)
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"{len(sim)}/{len(sim)} simulation covers hit", page)
+        db["covers"][sim[0]] = 0
+        rc, _, page = self.run_annotate(db)
+        self.assertEqual(rc, 1)
+        self.assertIn(f"**MISSED:** `{sim[0]}`", page)
+
+
+# --trace with --defer (M6): labels only (the other categories are emptied), code written to a
+# temporary root. Formal-only labels may be absent when deferred; any other missing label, or
+# the formal ones without --defer, count as missing.
+class TraceDeferSelfTest(unittest.TestCase):
+    # Count missing labels for a code file holding `labels`, with the given deferred Runs values.
+    def missing(self, labels: list[str], defer: set[str]) -> int:
+        mdl = vplan_check.check_structure(vplan_check.Vplan(VPLAN))
+        mdl.cov_items, mdl.tests, mdl.other_refs = {}, {}, {}
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "props.sv").write_text("\n".join(f"{lab}: assert (1);" for lab in labels))
+            with contextlib.redirect_stdout(io.StringIO()):
+                return vplan_check.run_trace(mdl, [Path(d)], Path(d) / "Makefile", False, defer)
+
+    # All non-formal labels present: 0 with formal deferred, the formal count without; one
+    # simulation label removed counts even with formal deferred.
+    def test_defer_formal(self):
+        props = vplan_check.check_structure(vplan_check.Vplan(VPLAN)).props
+        sim = [p for p, r in props.items() if r["Runs"] != "formal"]
+        n_formal = len(props) - len(sim)
+        self.assertEqual(self.missing(sim, {"formal"}), 0)
+        self.assertEqual(self.missing(sim, set()), n_formal)
+        self.assertEqual(self.missing(sim[1:], {"formal"}), 1)
 
 
 if __name__ == "__main__":

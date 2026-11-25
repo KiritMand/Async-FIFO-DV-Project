@@ -79,6 +79,9 @@ Run on 2026-11-21 with the pinned versions above: all PASS, 765 s total (T1 211 
 | T11 | *(M5, 2026-11-24)* covergroup constructs for `fifo_coverage`: covergroup embedded in a class in a package, `sample()` with arguments, range bins, `iff`, 3-value transition bins `(15 => 16 => 15)`, a cross of a transition coverpoint, `ignore_bins` on a cross (`!binsof(..) intersect {..}` and `binsof(..) && binsof(cp.bin)`), `option.per_instance = 0`, two instances | Verilator `--coverage-user` | **PASS** | All 39 records (37 live, 2 ignore) have exactly the hand-computed counts. Records are named by covergroup **type** (`t11_pkg::cov_c::cg.cp_f.full`), never by instance, and two sampled instances add into one record, so runs merge. Cross bins are named `<binA,binB>`; an `ignore_bins` is one record with `Bt=ignore` (its count = hits of ignored combinations), and no live cross bin is created for it. Record keys include source file, line and column, so merge only databases from the same build; key on the `h` field when comparing. **`cg.get_coverage()` is not the item average** (50.42% where the items average ~82%): report numbers from the `.dat`, never from that call. |
 | T12 | *(M5, 2026-11-24)* code coverage scoped to the design with a `.vlt` file: `--coverage-line --coverage-branch --coverage-toggle --coverage-user` | Verilator | **PASS, with a caveat** | `coverage_off -file "*/t12_tb.sv"` removes every line, branch and toggle point of that file (class methods and module signals) and keeps its covergroup. `*` matches across `/`. **A global `coverage_off` followed by `coverage_on -file "<dut>"` records no code coverage at all** (only the covergroup survives), silently, so list the files to exclude instead. Branch coverage is its own option in 5.055 (`v_branch` records); an untaken `else` shows as a 0-count branch point. |
 | T13 | *(M5, 2026-11-24)* per-test reseeding: `process::self().srandom($urandom ^ hash(+NAME))`, then `$urandom` and `randomize()` of an object created afterwards | Verilator | **PASS** | Same `+verilator+seed` and name: identical values (repeatable). Same seed, other name: both the object's `randomize()` result and `$urandom` change, so an object created after the reseed follows it. Used by `fifo_base_test` to decorrelate tests that share a seed (M5 closure, `docs/coverage_closure.md` H01). |
+| T14 | *(M6, 2026-11-24)* immediate assertions and covers as the FIFO property files use them: labeled `assert` with an `else $error` action, a keyword macro as the verb, a labeled immediate `cover`, `$past` inside an `if` that skips edges, `--no-assert`, `+verilator+error+limit`, `coverage_off -file` on the cover's own file | Verilator | **PASS** | Assertions and covers are **on by default** in 5.055 (`--assert` not needed); `--no-assert` removes the assertions and leaves cover records at count 0. A failure prints `[t] %Error: f.sv:l: Assertion failed in <scope>.<label>: <message>`, then `$stop`, exit 1. `+verilator+error+limit+N` keeps running and **exits 0** despite the errors, so tools must judge the log, not the exit code. A cover is a `t=user` record whose `o` field is its label; `coverage_off -file` on its file keeps it and its count. `$past` keeps history at every edge even when its statement is skipped. A declaration initializer gives no time-0 edge. |
+| T15 | *(M6, 2026-11-24)* the same style in open-source SBY (`read -formal`, `multiclock on`): action blocks, keyword macro (`assume`), `$past` in a block clocked by a design clock, async-reset flops, labeled covers, two clocks | SBY + Yosys + yices | **PASS, with two findings** | **Yosys rejects `else` on an immediate assertion** (`syntax error, unexpected TOK_ELSE`); a macro that expands to the action block only outside `FORMAL` works. bmc clean, both covers reached, the BREAK build fails by label; `$past` keeps history at every edge in Yosys too. **k-induction of a `$past` on a design clock is not inductive by itself:** the induction step fails, because a free clock can stay idle for the whole window (recorded, not judged; M7 needs invariants or gclk-based history). |
+| T16 | *(M6, 2026-11-24)* concurrent SVA for the optional simulation-only file: checker bound with `.*` into a module (reaching its internal nets), `[*N]` with a parameter count, `##1` antecedent, `$stable`/`$past`, two-term `disable iff`, bind parameters taken from the target's scope | Verilator | **PASS** | The clean build passes; BREAK fails on `cast_hold` only and BREAK2 on `cast_step` only, each with exit 1 and the same message format as immediate assertions (the `assertion` pattern parses both). A first BREAK that stepped the counter outside every 3-idle window passed, rightly: check that a negative test actually reaches the antecedent. |
 
 ## Findings that affect later modules
 
@@ -108,12 +111,30 @@ Run on 2026-11-21 with the pinned versions above: all PASS, 765 s total (T1 211 
   bins are records with `t=covergroup`, a hierarchical bin name (`h`) and bin type (`Bt=ignore|illegal`).
   No covergroup-level text report exists, so `regress.py` parses `.dat` directly (T2 has a working
   20-line parser).
-- **Assertions in sim (M6).** Verilator stops at the first failing assertion (exit 1). Pass/fail
-  patterns for `common/sim/verilator.patterns`: `%Error:`, `Assertion failed in`.
+- **Assertions in sim (M6, T14).** On by default; the first failure stops the run (exit 1) and
+  the log line names the label, which `common/sim/verilator.patterns` catches (`Assertion failed
+  in`). Its `assertion` pattern (groups `time`, `label`) lets `sva_neg.py` list every label that
+  failed at the first failing time; negative tests raise `+verilator+error+limit` for that, and
+  judge the log because the exit code is then 0. `--no-assert` is the switch for M8's
+  scoreboard-only column.
+- **Cover statements (M6, T14).** `regress.py` reads them from the merged database (`t=user`
+  records, label in `o`) into `functional.json` `covers`; `vplan_check --annotate` checks SO-1
+  from it. Code coverage excludes `sva/*` and `rtl/async_fifo_props.svh` without losing them.
+- **Lint of property code (M6).** `-Wall` reports SYNCASYNCNET wherever a property samples a reset
+  level at a clock edge (F01), at the RTL's reset port, so `make lint` and the smoke build pass
+  `-Wno-SYNCASYNCNET` with the property define (never for the RTL alone). PROCASSINIT (variables
+  with initializers written by processes) is waived in place in the simulation-only bookkeeping.
+  A `force` counts as a second writer (MULTIDRIVEN), so the negative-test bench uses the default
+  warning set plus `-Wno-MULTIDRIVEN`; a force applied in the time step of a clock edge can race
+  that edge's flops, so faults are applied between edges.
 - **Lint-clean idiom.** Write `if (obj.randomize() != 1)` — `!obj.randomize()` raises WIDTHTRUNC.
 - **Formal style (M6/M7).** Labeled immediate assertions/covers inside `always @(posedge gclk)`
   with `multiclock on` work, and SBY reports failures by label. Concurrent SVA is not available
-  in open-source formal (T6), so plan §3 R5's portable style is required, not optional.
+  in open-source formal (T6), so plan §3 R5's portable style is required, not optional. Action
+  blocks must sit behind a macro that is empty under `FORMAL` (T15). Read with
+  `read_verilog -sv -formal` (without `-sv`, `parameter int` is a syntax error); recent Yosys
+  represents every assert/assume/cover as a `$check` cell with a FLAVOR. M7: properties with
+  `$past` on a design clock need induction help (T15).
 - **MCY reproducibility (M9).** `mcy init` picks a random mutation set unless the config pins it:
   two runs of the same example scored 94.25% and 93.43%. M9's `config.mcy` must set `seed` in
   `[options]` and the report must quote it. ~0.5 s per mutant at `-j4` with Icarus — a UVM

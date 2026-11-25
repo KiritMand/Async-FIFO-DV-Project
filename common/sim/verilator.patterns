@@ -23,3 +23,11 @@ zero = [
   '^UVM_ERROR\s*:\s*(\d+)',
   '^UVM_FATAL\s*:\s*(\d+)',
 ]
+
+# A failed assertion's message: (?P<time>) the simulation time in brackets, (?P<label>) the
+# assertion's label (last component of its scope). Read by sva_neg.py (M6 negative tests) to
+# list which labels fired; always one pattern. Verilator form (toolchain T14):
+# "[35] %Error: f.sv:15: Assertion failed in top.u_chk.ast_x: <message>".
+assertion = [
+  '^\[(?P<time>\d+)\] %Error: \S+:\d+: Assertion failed in (?:\S+\.)?(?P<label>\w+)(?::|$)',
+]

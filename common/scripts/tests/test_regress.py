@@ -35,8 +35,12 @@ FAKE_SIM = textwrap.dedent(r'''
             b, "\x01Bt\x02ignore" if ign else "", b)
         return "C '%s' %d\n" % (k, c)
     line = "C '\x01t\x02line\x01page\x02v_line/dut\x01f\x02dut.sv\x01l\x023\x01o\x02if\x01h\x02top.dut' 1\n"
+    def cover(lab, c):  # a labeled cover statement (t=user, label in o), as Verilator writes it
+        return "C '\x01t\x02user\x01page\x02v_user/top\x01f\x02x.sv\x01l\x02%d\x01o\x02%s\x01h\x02top.%s' %d\n" % (
+            20 + len(lab), lab, lab, c)
     d.joinpath("coverage.dat").write_text("# SystemC::Coverage-3\n" + "".join(
-        rec(b, 1 if b == hit else 0) for b in ("lo", "mid", "hi")) + rec("bad", 0, True) + line)
+        rec(b, 1 if b == hit else 0) for b in ("lo", "mid", "hi")) + rec("bad", 0, True) + line
+        + cover("cov_lo", 2 if hit == "lo" else 0) + cover("cov_never", 0))
     sys.exit(1 if mode == "fail" else 0)
 ''')
 
@@ -190,7 +194,8 @@ class TestRegress(unittest.TestCase):
         self.assertIn("Merge failed", (self.out / "regress" / "summary.md").read_text())
 
     # With the real verilator_coverage: two runs hit different bins; the merge holds both, the
-    # ignored bin is not live, code coverage is counted per file; --merge-only reproduces it.
+    # ignored bin is not live, code coverage is counted per file, cover statements are summed by
+    # label and a never-hit one is reported (M6); --merge-only reproduces it.
     @unittest.skipUnless(shutil.which("verilator_coverage"), "verilator_coverage not on PATH")
     def test_real_merge_union(self):
         p = self.toml('''
@@ -212,9 +217,14 @@ class TestRegress(unittest.TestCase):
         self.assertEqual((fj["live"], fj["hit"]), (3, 2))
         cj = json.loads((self.out / "cov" / "code.json").read_text())
         self.assertEqual(cj["files"]["dut.sv"]["line"], {"points": 1, "hit": 1})
+        self.assertNotIn("x.sv", cj["files"])
+        self.assertEqual(fj["covers"], {"cov_lo": 2, "cov_never": 0})
         rc, _ = self.regress("--tests", str(p), "--merge-only")
         self.assertEqual(rc, 0)
-        self.assertIn("2/3 live bins (66.7%)", (self.out / "cov" / "functional.md").read_text())
+        md = (self.out / "cov" / "functional.md").read_text()
+        self.assertIn("2/3 live bins (66.7%)", md)
+        self.assertIn("Cover statements: 1/2 hit", md)
+        self.assertIn("**Never hit (1):** `cov_never`", md)
 
     # A hole is never displayed as 100%.
     def test_pct_never_rounds_a_hole_up(self):

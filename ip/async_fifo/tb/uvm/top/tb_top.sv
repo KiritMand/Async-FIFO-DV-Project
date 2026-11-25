@@ -15,10 +15,19 @@ module tb_top;
   fifo_wr_if wr_if (.wclk(wclk_if.clk), .wrst_n(wclk_if.rst_n));
   fifo_rd_if rd_if (.rclk(rclk_if.clk), .rrst_n(rclk_if.rst_n));
 
-  // Device under test (normal build: no ASYNC_FIFO_PROPS).
+  // Device under test. The sim flow builds it with ASYNC_FIFO_PROPS, so its white-box properties
+  // (rtl/async_fifo_props.svh) run inside it (M6).
   async_fifo #(.DSIZE(DSIZE), .ASIZE(ASIZE)) dut (
     .wclk  (wclk_if.clk), .wrst_n(wclk_if.rst_n), .winc(wr_if.winc), .wdata(wr_if.wdata), .wfull(wr_if.wfull),
     .rclk  (rclk_if.clk), .rrst_n(rclk_if.rst_n), .rinc(rd_if.rinc), .rdata(rd_if.rdata), .rempty(rd_if.rempty)
+  );
+
+  // End-to-end property checker on the same port nets (sva/async_fifo_e2e_props.sv, M6). Its
+  // asm_ checks hold the testbench to the formal assumptions; its counts are unused here.
+  async_fifo_e2e_props #(.DSIZE(DSIZE), .ASIZE(ASIZE), .K(K)) u_e2e (
+    .wclk  (wclk_if.clk), .wrst_n(wclk_if.rst_n), .winc(wr_if.winc), .wdata(wr_if.wdata), .wfull(wr_if.wfull),
+    .rclk  (rclk_if.clk), .rrst_n(rclk_if.rst_n), .rinc(rd_if.rinc), .rdata(rd_if.rdata), .rempty(rd_if.rempty),
+    .wr_cnt(), .rd_cnt()
   );
 
   // Publish the virtual interfaces, then start UVM.

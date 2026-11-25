@@ -22,6 +22,18 @@ include $(COMMON)/tools.mk
 RTL_DIR   ?= $(IP_ROOT)/rtl
 DUT_SRCS  ?= $(RTL_DIR)/async_fifo.sv
 
+# ---- Properties (M6): the white-box file the RTL includes under ASYNC_FIFO_PROPS, and the e2e
+# checker. PROPS_DIR stays the real rtl/ when RTL_DIR points at patched RTL, so a planted bug is
+# judged by the original properties (a patched directory must not carry its own copy).
+PROPS_DIR ?= $(IP_ROOT)/rtl
+PROPS_SVH  = $(PROPS_DIR)/async_fifo_props.svh
+E2E_SRC    = $(IP_ROOT)/sva/async_fifo_e2e_props.sv
+# Simulation only (decision D2): concurrent twins of the e2e assertions, bound into the e2e checker.
+CONC_SRC   = $(IP_ROOT)/sva/async_fifo_sva_concurrent.sv
+# The property blocks sample each reset level at clock edges (F01), which Verilator's -Wall style
+# warning SYNCASYNCNET reports at the RTL's reset ports; property code is never synthesized.
+PROPS_VLT  = +define+ASYNC_FIFO_PROPS +incdir+$(PROPS_DIR) -Wno-SYNCASYNCNET
+
 # ---- Run controls: which simulator/test/seed/clock ratio/formal task; J = parallel jobs.
 SIM       ?= verilator# DEC-001 (docs/decisions.md)
 TEST      ?=
@@ -32,7 +44,7 @@ J         ?= $(shell nproc 2>/dev/null || echo 4)
 
 # ---- Parameters: per-flow defaults (sim ASIZE=4 DSIZE=8; formal/MCY ASIZE=3 DSIZE=4).
 # Target-specific `?=` so a command-line ASIZE=/DSIZE= still wins.
-SIM_FLOWS    := lint synth smoke sim regress cov bugs
+SIM_FLOWS    := lint synth smoke sva-neg sim sim-build regress cov bugs
 FORMAL_FLOWS := formal mcy
 $(SIM_FLOWS):    ASIZE ?= 4
 $(SIM_FLOWS):    DSIZE ?= 8
@@ -48,7 +60,7 @@ define stub
 endef
 
 .DEFAULT_GOAL := help
-.PHONY: help lint synth smoke vplan sim sim-build regress cov formal bugs mcy results clean
+.PHONY: help lint synth smoke sva-neg vplan sim sim-build regress cov formal bugs mcy results clean
 
 # Self-documenting help: lists every rule that has a "## " description, plus variables.
 help: ## [M0] List targets and variables
@@ -74,9 +86,12 @@ REPRO_VARS  = ASIZE=$(ASIZE) DSIZE=$(DSIZE)$(if $(filter command line,$(origin R
 GUARD_CASES = 1:4:ASIZE 4:0:DSIZE
 
 # Static checks on the RTL alone, at ASIZE:DSIZE and at the smallest formal size 2:4 (where the
-# full-flag slice [ASIZE-2:0] is one bit); then every GUARD_CASES size must be rejected.
+# full-flag slice [ASIZE-2:0] is one bit); then every GUARD_CASES size must be rejected; then (M6)
+# the properties: the RTL with ASYNC_FIFO_PROPS and the e2e checker (with its bound concurrent
+# twins) under Verilator -Wall, and the RTL and e2e checker read by Yosys in formal mode, so the
+# M7 flow will accept them (toolchain T15; the concurrent file is simulation only, T6).
 LINT_CFGS   = $(ASIZE):$(DSIZE) 2:4
-lint: ## [M1] Verilator -Wall at ASIZE:DSIZE and 2:4; ASIZE=1 and DSIZE=0 must be rejected
+lint: ## [M1/M6] Verilator -Wall (RTL, RTL+props, e2e checker), Yosys -formal parse; ASIZE=1, DSIZE=0 rejected
 	@mkdir -p $(OUT)/lint
 	@set -e; for c in $(LINT_CFGS); do \
 	  cmd="verilator --lint-only -Wall $(VLT_GUARD) -GASIZE=$${c%:*} -GDSIZE=$${c#*:} $(DUT_SRCS)"; \
@@ -89,6 +104,16 @@ lint: ## [M1] Verilator -Wall at ASIZE:DSIZE and 2:4; ASIZE=1 and DSIZE=0 must b
 	  if $$cmd > $$log 2>&1; then echo "lint FAIL: ASIZE=$$a DSIZE=$$d was accepted" >&2; exit 1; fi; \
 	  grep -q "$$p must be >=" $$log || \
 	    { echo "lint FAIL: ASIZE=$$a DSIZE=$$d rejected without the $$p guard message, see $$log" >&2; exit 1; }; \
+	done
+	@set -e; for c in $(LINT_CFGS); do a=$${c%:*}; d=$${c#*:}; \
+	  cmd="verilator --lint-only -Wall $(VLT_GUARD) $(PROPS_VLT) -GASIZE=$$a -GDSIZE=$$d $(DUT_SRCS)"; \
+	  echo "+ $$cmd"; $$cmd; \
+	  cmd="verilator --lint-only -Wall --timing -Wno-SYNCASYNCNET -GASIZE=$$a -GDSIZE=$$d --top-module async_fifo_e2e_props $(E2E_SRC) $(CONC_SRC)"; \
+	  echo "+ $$cmd"; $$cmd; \
+	  y="read_verilog -sv -formal -D ASYNC_FIFO_PROPS -I $(PROPS_DIR) $(DUT_SRCS); chparam -set ASIZE $$a -set DSIZE $$d async_fifo; prep -top async_fifo"; \
+	  echo "+ yosys -q -p '$$y'"; yosys -q -l $(OUT)/lint/yosys_props_a$${a}_d$$d.log -p "$$y" > /dev/null; \
+	  y="read_verilog -sv -formal $(E2E_SRC); chparam -set ASIZE $$a -set DSIZE $$d async_fifo_e2e_props; prep -top async_fifo_e2e_props"; \
+	  echo "+ yosys -q -p '$$y'"; yosys -q -l $(OUT)/lint/yosys_e2e_a$${a}_d$$d.log -p "$$y" > /dev/null; \
 	done
 	@echo "lint PASS   repro: make lint $(REPRO_VARS)"
 
@@ -115,6 +140,9 @@ synth: ## [M1] Yosys: guards reject bad sizes, check -assert, pre-opt flop count
 
 # Directed non-UVM smoke test (tb/smoke/tb_smoke.sv), built once per ASIZE/DSIZE; the clock ratio
 # is a run-time plusarg, so one build runs every ratio. Default: 1:3 and 3:1 (M1 Done-when).
+# The DUT carries its white-box properties (M6). The e2e checker is not attached: this bench
+# drives at falling edges and releases resets 1 ns after an edge, which the A02/A03 testbench
+# checks would reject (they hold the UVM bench to the formal assumptions).
 # RATIO="w:r ..." = wclk period : rclk period; TRACE=1 writes smoke.vcd next to each run log
 # (VCD, not FST: this Verilator's FST writer needs lz4.h, which the host lacks — toolchain.md).
 SMOKE_BLD   = $(OUT)/smoke/build_a$(ASIZE)_d$(DSIZE)
@@ -122,7 +150,7 @@ TRACE      ?= 0
 smoke: RATIO = 1:3 3:1
 smoke: ## [M1] Directed smoke test at RATIO="1:3 3:1" (wclk:rclk periods); TRACE=1 for VCD
 	@mkdir -p $(SMOKE_BLD)
-	@cmd="verilator --binary --timing -Wall $(VLT_GUARD) --timescale 1ns/1ps --trace -j $(J) -GASIZE=$(ASIZE) -GDSIZE=$(DSIZE) --top-module tb_smoke -Mdir $(SMOKE_BLD) $(IP_ROOT)/tb/smoke/tb_smoke.sv $(DUT_SRCS)"; \
+	@cmd="verilator --binary --timing -Wall $(VLT_GUARD) $(PROPS_VLT) --timescale 1ns/1ps --trace -j $(J) -GASIZE=$(ASIZE) -GDSIZE=$(DSIZE) --top-module tb_smoke -Mdir $(SMOKE_BLD) $(IP_ROOT)/tb/smoke/tb_smoke.sv $(DUT_SRCS)"; \
 	  echo "+ $$cmd"; \
 	  $$cmd > $(SMOKE_BLD)/build.log 2>&1 || { grep -E '%(Error|Warning)' $(SMOKE_BLD)/build.log | head -20; \
 	    echo "smoke FAIL: build, see $(SMOKE_BLD)/build.log" >&2; exit 1; }
@@ -138,14 +166,35 @@ smoke: ## [M1] Directed smoke test at RATIO="1:3 3:1" (wclk:rclk periods); TRACE
 	done
 	@echo "smoke PASS at RATIO=\"$(RATIO)\"   repro: make smoke RATIO=\"$(RATIO)\" $(REPRO_VARS)"
 
+# Assertion negative tests (M6 step 4): tb/sva_neg/tb_sva_neg.sv, with the white-box properties in
+# the DUT, the e2e checker on its ports and its concurrent twins bound in, built once per size;
+# sva_neg.py then runs the clean case and one +BREAK=<label> case per simulation assertion of the
+# vplan (error limit raised, so every label failing at the first failing time is seen), checks that
+# each concurrent twin fails with its immediate twin, and writes the results page. Default
+# warning set plus -Wno-MULTIDRIVEN: each `force` is a second writer of a DUT variable by design
+# (make lint holds the RTL and properties to -Wall). The page is written only for the real RTL.
+SVA_NEG_BLD = $(OUT)/sva_neg/build_a$(ASIZE)_d$(DSIZE)
+SVA_NEG_DOC = $(if $(filter command line,$(origin RTL_DIR) $(origin DUT_SRCS)),,--doc $(IP_ROOT)/docs/sva_negative_tests.md)
+sva-neg: ## [M6] Break each assertion on purpose (force or bad stimulus); each must fire
+	@mkdir -p $(SVA_NEG_BLD)
+	@cmd="verilator --binary --timing $(VLT_GUARD) -Wno-MULTIDRIVEN $(PROPS_VLT) --timescale 1ns/1ps --trace -j $(J) -GASIZE=$(ASIZE) -GDSIZE=$(DSIZE) --top-module tb_sva_neg -Mdir $(SVA_NEG_BLD) $(IP_ROOT)/tb/sva_neg/tb_sva_neg.sv $(DUT_SRCS) $(E2E_SRC) $(CONC_SRC)"; \
+	  echo "+ $$cmd"; \
+	  $$cmd > $(SVA_NEG_BLD)/build.log 2>&1 || { grep -E '%(Error|Warning)' $(SVA_NEG_BLD)/build.log | head -20; \
+	    echo "sva-neg FAIL: build, see $(SVA_NEG_BLD)/build.log" >&2; exit 1; }
+	python3 $(COMMON)/scripts/sva_neg.py --exe $(SVA_NEG_BLD)/Vtb_sva_neg --vplan $(VPLAN) \
+	  --patterns $(COMMON)/sim/verilator.patterns --out $(OUT)/sva_neg/a$(ASIZE)_d$(DSIZE) $(SVA_NEG_DOC) \
+	  --twins $(CONC_SRC) --config "ASIZE=$(ASIZE) DSIZE=$(DSIZE)" --sim-args '+verilator+error+limit+1000' \
+	  --repro 'make sva-neg $(REPRO_VARS)'
+
 # Verification-plan traceability (M2): the plan's structure must pass; the self-test proves the
-# checker still fails on broken plans; --trace reports which planned names exist in code yet.
+# checker still fails on broken plans; --trace --strict requires every planned name in the code,
+# except labels whose Runs is formal (deferred to M7: drop --defer formal there).
 VPLAN      = $(IP_ROOT)/docs/vplan.md
 VPLAN_CHK  = python3 $(COMMON)/scripts/vplan_check.py --vplan $(VPLAN)
 vplan: ## [M2] Check docs/vplan.md structure, self-test the checker, report code traceability
 	$(VPLAN_CHK) --structure
 	VPLAN=$(VPLAN) python3 -m unittest discover -s $(COMMON)/scripts/tests -q
-	$(VPLAN_CHK) --trace --root $(IP_ROOT) --root $(COMMON)
+	$(VPLAN_CHK) --trace --strict --defer formal --root $(IP_ROOT) --root $(COMMON)
 	@echo "vplan PASS   repro: make vplan"
 
 # ---- UVM testbench (M3): sources in compile order (interfaces and packages, then DUT, then top);
@@ -159,15 +208,20 @@ TB_DEPS     = $(shell find $(TB_DIR) $(COMMON)/uvm -name '*.sv' -o -name '*.svh'
 # One build per simulator, size and RTL source list, so M8/M9 builds of patched RTL coexist.
 BUILD_TAG   = $(SIM)_a$(ASIZE)_d$(DSIZE)_$(shell echo '$(DUT_SRCS)' | md5sum | cut -c1-8)
 PLUSARGS   ?=
-# Code coverage (line, branch, toggle) is for the design only: no UVM, testbench or common TB code.
-COV_EXCLUDE = $(UVM_HOME)/* $(TB_DIR)/* $(COMMON)/uvm/*
+# Code coverage (line, branch, toggle) is for the design only: no UVM, testbench, common TB or
+# property code. Cover statements in the excluded property files still count (toolchain T14).
+COV_EXCLUDE = $(UVM_HOME)/* $(TB_DIR)/* $(COMMON)/uvm/* $(IP_ROOT)/sva/* $(PROPS_SVH)
 
 # Run directory name: out/.../run/<RUN>_<SEED>. RUN defaults to the test; regression entries that
 # run one test with different plusargs give each its own name (regress/tests.toml `id`).
 RUN        ?= $(TEST)
 # Everything the simulator layer needs to build the testbench (shared by sim and sim-build).
-SIM_BUILD_ARGS = TOP=tb_top SRCS="$(TB_PRE) $(DUT_SRCS) $(TB_DIR)/top/tb_top.sv" INCDIRS="$(TB_INCDIRS)" \
-	  DEFINES="FIFO_ASIZE=$(ASIZE) FIFO_DSIZE=$(DSIZE)" DEPS="$(TB_DEPS) $(DUT_SRCS)" \
+# Assertions are always on (M6, SO-2): the RTL is built with ASYNC_FIFO_PROPS and tb_top holds the
+# e2e checker; assertions and cover statements are on by default in this Verilator (toolchain T14).
+SIM_BUILD_ARGS = TOP=tb_top SRCS="$(TB_PRE) $(DUT_SRCS) $(E2E_SRC) $(CONC_SRC) $(TB_DIR)/top/tb_top.sv" \
+	  INCDIRS="$(TB_INCDIRS) $(PROPS_DIR)" \
+	  DEFINES="FIFO_ASIZE=$(ASIZE) FIFO_DSIZE=$(DSIZE) ASYNC_FIFO_PROPS" \
+	  DEPS="$(TB_DEPS) $(DUT_SRCS) $(PROPS_SVH) $(E2E_SRC) $(CONC_SRC)" \
 	  BUILD_DIR=$(OUT)/build/$(BUILD_TAG) J=$(J) UVM_HOME=$(UVM_HOME) COV_EXCLUDE="$(COV_EXCLUDE)"
 
 # One UVM test at one seed: build once per configuration, run in out/.../run/<RUN>_<seed>/,

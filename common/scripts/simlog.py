@@ -3,10 +3,12 @@
 # Simulator-agnostic: the rules come from common/sim/<sim>.patterns. M5's regress.py imports judge().
 """Judge a simulation log against a patterns file.
 
-The patterns file is TOML with three lists of regexes (Python syntax, matched per line):
-  fail     any matching line fails the run (the first one is reported)
-  require  each must match at least one line (end-of-test markers)
-  zero     one capture group each; the line must exist and every captured number must be 0
+The patterns file is TOML with lists of regexes (Python syntax, matched per line):
+  fail       any matching line fails the run (the first one is reported)
+  require    each must match at least one line (end-of-test markers)
+  zero       one capture group each; the line must exist and every captured number must be 0
+  assertion  optional, one pattern with groups `time` and `label`: a failed assertion's message
+             (not used by judge(); sva_neg.py reads it to list which labels fired)
 A non-zero simulator exit code also fails the run.
 
 Prints one verdict line, plus the run's configuration line if the log has one.
@@ -25,14 +27,21 @@ from pathlib import Path
 CFG_LINE = re.compile(r"\[CFG\]\s+(.*)$")
 
 
+# The keys a patterns file may have (see the module docstring).
+KEYS = ("fail", "require", "zero", "assertion")
+
+
 # Read and compile the rules; a bad file is a usage error, never a silent pass.
 def load_rules(path: Path) -> dict[str, list[re.Pattern[str]]]:
     with path.open("rb") as f:
         raw = tomllib.load(f)
-    unknown = set(raw) - {"fail", "require", "zero"}
+    unknown = set(raw) - set(KEYS)
     if unknown:
         raise ValueError(f"{path}: unknown keys {sorted(unknown)}")
-    return {k: [re.compile(p) for p in raw.get(k, [])] for k in ("fail", "require", "zero")}
+    rules = {k: [re.compile(p) for p in raw.get(k, [])] for k in KEYS}
+    if len(rules["assertion"]) > 1 or any({"time", "label"} - set(p.groupindex) for p in rules["assertion"]):
+        raise ValueError(f"{path}: 'assertion' must be one pattern with groups 'time' and 'label'")
+    return rules
 
 
 # Apply the rules to the log text. Returns (passed, reasons); reasons explain every failure.

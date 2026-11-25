@@ -215,3 +215,33 @@ IDs are `DEC-NNN`; cite them from code comments and other docs.
     closure and reproduction.
   - Aligned integer runs still put an accepted write and read in the same step at the boundary
     in about (K+1)/d ≈ 40–57% of slow-side operations, which is the F16 stimulus.
+
+## DEC-010 — M6 assertion decisions
+
+- **Date:** 2026-11-24
+- **Status:** APPROVED (owner, 2026-11-24, M6 kickoff: "go with recommendations") — recorded in
+  `ip/async_fifo/docs/vplan.md` v0.4 (§1.2, §4 "As built (M6)", §5 A01)
+- **Options and choices:**
+  1. **D1, showing each assertion can fail.** A force-based negative-test bench now, or wait for
+     M8's planted bugs. *Choice: now* (`tb/sva_neg/`, `make sva-neg`, `common/scripts/sva_neg.py`).
+     The twelve M8 bugs don't reach every assertion (the reset-value checks, for example).
+  2. **D2, optional concurrent SVA.** *Choice: yes, simulation only:* the eight e2e assertions
+     restated with implication, `[*K+1]`, `##1` and `disable iff` in
+     `sva/async_fifo_sva_concurrent.sv`, bound into the e2e checker, labeled `cast_<FID>_<name>`.
+     They run in the regression and in the negative tests. Formal keeps the immediate versions
+     (open-source formal rejects concurrent SVA, toolchain T6).
+  3. **D3, cover list (plan M6 step 3, [PAIR]).** *Choice: no additions.* The vplan's 15
+     simulation and 7 formal-only covers stand. The F16 covers stay formal-only; in simulation,
+     `cg_concurrent` covers the same events.
+  4. **D4, A01 simulation wording.** "Both resets low at the first rising edge of *each* clock"
+     fails on a legal testbench whose `rrst_n` is released before `wclk` first rises. *Choice:* at
+     the first rising edge of *either* clock, both resets are 0 (the true initial state).
+  5. **D5, A06.** `asm_A06_*` (inputs never X) can't fire in a two-state simulator. *Choice:*
+     record it as not demonstrable in Verilator (no second simulator).
+- **Consequences:**
+  - Every simulation assertion has a demonstrated failure (25 of 27; A06's two are documented in
+    `docs/sva_negative_tests.md`). M8 still records which planted bug trips which assertion.
+  - Concurrent twins use a distinct prefix so a twin can never hide its immediate twin in a
+    failure report; `sva_neg.py --twins` checks each twin fires in its twin's case.
+  - The vplan intents, bins, checks and ledger rows are unchanged apart from A01's simulation
+    wording.
