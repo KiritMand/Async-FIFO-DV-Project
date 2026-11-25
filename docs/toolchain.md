@@ -82,6 +82,8 @@ Run on 2026-11-21 with the pinned versions above: all PASS, 765 s total (T1 211 
 | T14 | *(M6, 2026-11-24)* immediate assertions and covers as the FIFO property files use them: labeled `assert` with an `else $error` action, a keyword macro as the verb, a labeled immediate `cover`, `$past` inside an `if` that skips edges, `--no-assert`, `+verilator+error+limit`, `coverage_off -file` on the cover's own file | Verilator | **PASS** | Assertions and covers are **on by default** in 5.055 (`--assert` not needed); `--no-assert` removes the assertions and leaves cover records at count 0. A failure prints `[t] %Error: f.sv:l: Assertion failed in <scope>.<label>: <message>`, then `$stop`, exit 1. `+verilator+error+limit+N` keeps running and **exits 0** despite the errors, so tools must judge the log, not the exit code. A cover is a `t=user` record whose `o` field is its label; `coverage_off -file` on its file keeps it and its count. `$past` keeps history at every edge even when its statement is skipped. A declaration initializer gives no time-0 edge. |
 | T15 | *(M6, 2026-11-24)* the same style in open-source SBY (`read -formal`, `multiclock on`): action blocks, keyword macro (`assume`), `$past` in a block clocked by a design clock, async-reset flops, labeled covers, two clocks | SBY + Yosys + yices | **PASS, with two findings** | **Yosys rejects `else` on an immediate assertion** (`syntax error, unexpected TOK_ELSE`); a macro that expands to the action block only outside `FORMAL` works. bmc clean, both covers reached, the BREAK build fails by label; `$past` keeps history at every edge in Yosys too. **k-induction of a `$past` on a design clock is not inductive by itself:** the induction step fails, because a free clock can stay idle for the whole window (recorded, not judged; M7 needs invariants or gclk-based history). |
 | T16 | *(M6, 2026-11-24)* concurrent SVA for the optional simulation-only file: checker bound with `.*` into a module (reaching its internal nets), `[*N]` with a parameter count, `##1` antecedent, `$stable`/`$past`, two-term `disable iff`, bind parameters taken from the target's scope | Verilator | **PASS** | The clean build passes; BREAK fails on `cast_hold` only and BREAK2 on `cast_step` only, each with exit 1 and the same message format as immediate assertions (the `assertion` pattern parses both). A first BREAK that stepped the counter outside every 3-idle window passed, rightly: check that a negative test actually reaches the antecedent. |
+| T17 | *(M7, 2026-11-24)* async-reset release in the same formal step as a rising clock edge (`multiclock on`): an RTL-style counter (reset outside the data path) and a checker-style counter (accept term includes the reset) under three release rules: SAME (only with a clock rise, the vplan's A02 wording), LATE (only without one), free | SBY + Yosys + yices | **PASS** | The coincident release with `inc` high is reachable (`cov_edge_inc`, step 1) and the flop **still acts as in reset at that edge**, as in simulation (`ast_release_holds`); the two counters agree under all three rules (bmc 16), LATE also covers and proves. So the vplan's A02 formal wording (DEC-011 D3) needs no change, and a free release did not break this toy (the A02 audit in M7 checks the FIFO). Config finding: a `.sby` line prefix naming several tasks (`a b: ...`) is rejected (`Unused option: a`); use tags on the `[tasks]` lines. |
+| T18 | *(M7, 2026-11-24)* harness structure: `(* gclk *)` in two modules of one design, `$rose`/`$changed` of a design clock in a gclk block, `abc pdr` with an assumption under `multiclock on`, a hierarchical reference into an instance | SBY + Yosys + yices / abc | **PASS, with a finding** | Two gclk declarations work (the submodule's gclk assertion fails by its label `t18_top.u.ast_sub_on_edge` under BREAK); k-induction and `abc pdr` prove with the assumption, and `abc pdr` fails without it, so pdr honors assumptions. **A hierarchical reference is not resolved: Yosys declares an implicit, undriven wire named `\u.c` (warnings only) that the solver treats as free**, so an assertion through it fails and an assumption through it would silently constrain nothing. `` `default_nettype none `` makes it an error. Export signals through ports instead; `make formal` fails on "implicitly declared" and "has no driver" warnings. |
 
 ## Findings that affect later modules
 
@@ -133,8 +135,33 @@ Run on 2026-11-21 with the pinned versions above: all PASS, 765 s total (T1 211 
   in open-source formal (T6), so plan §3 R5's portable style is required, not optional. Action
   blocks must sit behind a macro that is empty under `FORMAL` (T15). Read with
   `read_verilog -sv -formal` (without `-sv`, `parameter int` is a syntax error); recent Yosys
-  represents every assert/assume/cover as a `$check` cell with a FLAVOR. M7: properties with
-  `$past` on a design clock need induction help (T15).
+  represents every assert/assume/cover as a `$check` cell with a FLAVOR. Properties with
+  `$past` on a design clock need induction help (T15). M7's answer is named history registers
+  (`x_q <= x` at the same edge, which is what `$past` keeps), so invariants can constrain them.
+- **Formal flow (M7).** `common/scripts/formal_run.py` (behind `make formal*`) holds what the M7
+  runs taught:
+  - **No variables in a `.sby`.** SBY expands environment variables in `[files]` paths only,
+    never in `[script]`, so the runner writes a per-size copy (sizes in the `chparam` line,
+    absolute sources, so `RTL_DIR`/`DUT_SRCS` reach formal).
+  - **Task tags.** A line prefix naming several tasks (`a b: ...`) is rejected (T17); shared
+    lines use tags from the `[tasks]` lines.
+  - **Verdicts.** A failed induction step is `UNKNOWN` (rc 4), not `FAIL`; so is a broken proof
+    whose bug lies deeper than the base case (planted B05). Expect `nopass` for "this must not
+    prove".
+  - **bmc with invariants loaded** reports an invariant before the spec property it protects
+    (B05: `inv_rempty_safe` instead of `ast_F14_rdata_stable_gclk`), because SBY stops at the
+    first failure. `bmc_spec` and the A01/A05 audits read with `FORMAL_NO_INV`. But on a correct
+    design bmc **without** invariants is slow: smtbmc assumes the assertions already checked at
+    earlier steps, so the invariants prune the search (depth 40 in 48 s at ASIZE=3 with them; more
+    than 5 min for step 21 alone at ASIZE=2 without). The sign-off `bmc` keeps them.
+  - **`smtbmc --keep-going`** lists every failing assertion but is slow: the A05 audit took
+    604 s at ASIZE=3 against 4 s for A01.
+  - **Traces.** yosys-smtbmc writes formal step k at `#10k` (plus a half step at `#10k+5`); the
+    full cover-to-trace map is in `<workdir>/PASS`, while the log lists only the first few.
+    `common/scripts/vcd2svg.py --step 10` gives one row or column per step (`--table` for
+    debugging, `--svg` for figures).
+  - **Solver time is not monotonic in size.** cover took 14 s at ASIZE=3 but 342 s at ASIZE=2
+    (the latter with the regression loading all cores; see `docs/results.md` for clean numbers).
 - **MCY reproducibility (M9).** `mcy init` picks a random mutation set unless the config pins it:
   two runs of the same example scored 94.25% and 93.43%. M9's `config.mcy` must set `seed` in
   `[options]` and the report must quote it. ~0.5 s per mutant at `-j4` with Icarus — a UVM

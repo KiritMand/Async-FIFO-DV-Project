@@ -1,0 +1,38 @@
+# SymbiYosys job for T17. Run one task with: sby -f t17.sby <task>
+
+# Three release rules (see t17_arst.sv), each checked by bmc; cover under SAME (the decisive
+# coincident release is reachable) and LATE (not vacuous); prove under LATE (k-induction).
+# Words after a task name are tags: a `bmc:`/`same:`/`late:`/`cov:` line applies to every task
+# that has that name or tag
+# (a prefix naming several tasks, `a b:`, is rejected as an unknown option).
+[tasks]
+same bmc
+free bmc
+late bmc
+same_cover same cov
+late_cover late cov
+late_prove late
+
+# bmc depth 16 is several clock periods; multiclock on is required for the async reset and gclk.
+[options]
+bmc: mode bmc
+bmc: depth 16
+cov: mode cover
+cov: depth 20
+late_prove: mode prove
+multiclock on
+
+# yosys-smtbmc with yices, as in T4 and T15.
+[engines]
+smtbmc yices
+
+# Read with FORMAL and the release-rule define, elaborate t17_arst as top.
+[script]
+same: read -formal -DSAME t17_arst.sv
+late: read -formal -DLATE t17_arst.sv
+free: read -formal t17_arst.sv
+prep -top t17_arst
+
+# Source copied into each task directory.
+[files]
+t17_arst.sv

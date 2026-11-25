@@ -203,16 +203,49 @@ class AnnotateSelfTest(unittest.TestCase):
             groups.setdefault(g, {"items": {}})["items"][i] = {"bins": {f"b{j}": 1 for j in range(n)}, "ignored": {}}
         return {"sim": "verilator", "merged_runs": 3, "groups": groups}
 
-    # Write the database, run the checker on the real plan, return (exit code, output, page).
-    def run_annotate(self, db: dict) -> tuple[int, str, str]:
+    # Write the database (and the formal sign-off JSON, if given), run the checker on the real
+    # plan, return (exit code, output, page).
+    def run_annotate(self, db: dict, formal: dict | None = None) -> tuple[int, str, str]:
         with tempfile.TemporaryDirectory() as d:
-            cov, status = Path(d) / "functional.json", Path(d) / "status.md"
+            cov, status, fj = Path(d) / "functional.json", Path(d) / "status.md", Path(d) / "signoff.json"
             cov.write_text(json.dumps(db))
+            extra = []
+            if formal is not None:
+                fj.write_text(json.dumps(formal))
+                extra = ["--formal", str(fj)]
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
                 rc = vplan_check.main(["--annotate", "--strict", "--vplan", str(VPLAN), "--cov", str(cov),
-                                       "--status-out", str(status)])
+                                       "--status-out", str(status)] + extra)
             return rc, buf.getvalue(), status.read_text()
+
+    # A formal_run.py sign-off JSON: prove and cover at ASIZE 2 and 3, every planned formal cover
+    # reached, every run as expected.
+    def formal(self) -> dict:
+        props = vplan_check.check_structure(vplan_check.Vplan(VPLAN)).props
+        fcov = {p: 1 for p, r in props.items() if p.startswith("cov_") and r["Runs"] in ("formal", "both")}
+        runs = [{"task": t, "asize": a, "verdict": "PASS", "ok": True, "reached": fcov if t == "cover" else {}}
+                for a in (2, 3) for t in ("prove", "cover", "pdr")]
+        return {"meta": {"generated": "now", "repro": "make formal-signoff"}, "runs": runs}
+
+    # SO-3 (M7): a complete sign-off passes and fills the page; a cover missed at one size or a
+    # proof that did not pass fails strict and is named.
+    def test_formal_signoff(self):
+        db = self.database()
+        db["covers"] = {}
+        props = vplan_check.check_structure(vplan_check.Vplan(VPLAN)).props
+        db["covers"] = {p: 1 for p, r in props.items() if p.startswith("cov_") and r["Runs"] in ("sim", "both")}
+        rc, out, page = self.run_annotate(db, self.formal())
+        self.assertEqual(rc, 0, out)
+        self.assertIn("k-induction PASS at ASIZE 2, 3", page)
+        self.assertNotIn("pending (M7)", page)
+        f = self.formal()
+        f["runs"][1]["reached"] = {}
+        f["runs"][3]["verdict"] = "UNKNOWN"
+        rc, _, page = self.run_annotate(db, f)
+        self.assertEqual(rc, 1)
+        self.assertIn("**MISSED at 2:**", page)
+        self.assertIn("k-induction PASS at ASIZE 2 (required: 2, 3)", page)
 
     # Every planned bin hit: strict passes and the page says so.
     def test_complete_database_passes(self):

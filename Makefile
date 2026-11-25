@@ -19,7 +19,7 @@ help: _help_banner
 _help_banner:
 	@echo "Block: IP=$(IP)   (available: $(IPS))"
 	@echo "Repo targets:"
-	@echo "  tools-smoke   rerun toolchain experiments tools_smoke/T1..T15 (T=\"T1 T3\" for a subset)"
+	@echo "  tools-smoke   rerun toolchain experiments tools_smoke/T1..T18 (T=\"T1 T3\" for a subset)"
 	@echo "  clean-all     remove all of out/"
 	@echo ""
 .PHONY: _help_banner

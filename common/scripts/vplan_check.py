@@ -14,7 +14,8 @@ Modes:
   --annotate   write docs/vplan_status.md: the merged coverage of the last regression
                (functional.json from regress.py) per vplan coverage item and per feature, the
                regression result, the simulation cover properties (functional.json "covers"),
-               and what is still pending (formal M7).
+               and, with --formal (M7), the formal sign-off (formal_run.py's signoff.json):
+               SO-3 and each feature's Formal column.
                With --strict it fails on any hole, any planned item missing from the coverage
                database, or a bin count that differs from the plan's stated total.
 
@@ -616,10 +617,56 @@ def pct(hit: int, total: int) -> str:
     return "100%" if hit == total else f"{min(99.9, 100.0 * hit / total):.1f}%"
 
 
+# SO-3 (vplan §7) from formal_run.py's sign-off JSON: k-induction passes at ASIZE 2 and 3, every
+# formal cover of the plan (Runs = formal or both, not excluded) is reached in each cover run,
+# every run met its expectation (pdr, audit, cross-checks). Returns (SO-3 text, per-feature
+# Formal text, number of problems).
+SO3_SIZES = (2, 3)
+
+
+def formal_status(mdl: Model, data: dict, excluded: set[str]) -> tuple[str, dict[str, str], int]:
+    runs = data["runs"]
+    by = lambda task: {r["asize"]: r for r in runs if r["task"] == task}
+    prove, cover, pdr = by("prove"), by("cover"), by("pdr")
+    fcov = [p for p, r in mdl.props.items() if p.startswith("cov_") and r["Runs"] in ("formal", "both")
+            and p not in excluded]
+    missed = {a: [c for c in fcov if c not in r["reached"]] for a, r in cover.items()}
+    proven = [a for a in SO3_SIZES if a in prove and prove[a]["verdict"] == "PASS"]
+    reached = [a for a in SO3_SIZES if a in cover and not missed[a]]
+    bad_runs = [r for r in runs if not r["ok"]]
+    problems = (len(SO3_SIZES) - len(proven)) + (len(SO3_SIZES) - len(reached)) + len(bad_runs)
+    sizes = lambda xs: ", ".join(str(x) for x in xs) or "none"
+    audit = ", ".join(f"{r['task'][-3:].upper()} dropped: {r['verdict']}" for r in runs
+                      if r["task"].startswith("audit_") and r["asize"] == max(SO3_SIZES))
+    text = (f"k-induction PASS at ASIZE {sizes(proven)} (required: {sizes(SO3_SIZES)}); "
+            f"formal covers {len(fcov)}/{len(fcov)} reached at ASIZE {sizes(reached)}"
+            + "".join(f" — **MISSED at {a}:** {', '.join(f'`{c}`' for c in m)}" for a, m in missed.items() if m)
+            + f"; pdr {', '.join(f'{a}: {r['verdict']}' for a, r in sorted(pdr.items())) or 'not run'}"
+            + (f"; audit at ASIZE {max(SO3_SIZES)}: {audit}" if audit else "")
+            + (f"; **{len(bad_runs)} run(s) not as expected:** "
+               + ", ".join(f"{r['task']}@{r['asize']} {r['verdict']}" for r in bad_runs) if bad_runs else "")
+            + f"; {data['meta']['generated']}; reproduce with `{data['meta']['repro']}`.")
+    per_feature = {}
+    for fid in mdl.features:
+        labs = [p for p, r in mdl.props.items() if r["Runs"] in ("formal", "both")
+                and (m := LABEL_RE.match(p)) and m.group(1) == fid]
+        asts = [p for p in labs if p.startswith("ast_")]
+        covs = [p for p in labs if p.startswith("cov_") and p not in excluded]
+        parts = []
+        if asts:
+            parts.append(f"{len(asts)} assertion(s) " + ("proven" if len(proven) == len(SO3_SIZES) else "**NOT PROVEN**"))
+        if covs:
+            hit = sum(all(c in cover[a]["reached"] for a in SO3_SIZES if a in cover) for c in covs)
+            parts.append(f"{hit}/{len(covs)} cover(s) reached")
+        per_feature[fid] = "; ".join(parts)
+    return text, per_feature, problems
+
+
 # Write the status page from the plan, the merged coverage and (optionally) the regression
-# results. Returns the number of problems --strict fails on: holes, missing items, a bin count
-# different from the plan's total.
-def run_annotate(vp: Vplan, mdl: Model, cov_path: Path, results_path: Path | None, out: Path) -> int:
+# results and the formal sign-off. Returns the number of problems --strict fails on: holes,
+# missing items, a bin count different from the plan's total, an SO-3 shortfall.
+def run_annotate(vp: Vplan, mdl: Model, cov_path: Path, results_path: Path | None, out: Path,
+                 formal_path: Path | None = None) -> int:
     cov = json.loads(cov_path.read_text())
     groups = cov["groups"]
     covers = cov.get("covers")  # cover-property hits {label: count}, once M6 adds them
@@ -647,6 +694,11 @@ def run_annotate(vp: Vplan, mdl: Model, cov_path: Path, results_path: Path | Non
     problems += holes_total + len(missing) + (not count_ok)
     # Items in the database that the plan doesn't list (helper coverpoints for crosses).
     extra = sorted(f"{g}.{i}" for g, gd in groups.items() for i in gd["items"] if f"{g}.{i}" not in mdl.cov_items)
+    # Formal sign-off (M7), if given.
+    so3, formal_feat = "pending (M7)", {}
+    if formal_path and formal_path.is_file():
+        so3, formal_feat, fprob = formal_status(mdl, json.loads(formal_path.read_text()), excluded)
+        problems += fprob
     # Per feature: its coverage items, its simulation cover properties, its formal column.
     feats = []
     for fid, r in mdl.features.items():
@@ -665,7 +717,7 @@ def run_annotate(vp: Vplan, mdl: Model, cov_path: Path, results_path: Path | Non
         else:
             hit_c = sum(1 for c in sim_covers if covers.get(c, 0) > 0)
             pstat = f"{hit_c}/{len(sim_covers)} hit" + ("" if hit_c == len(sim_covers) else " — **MISSED**")
-        formal = "n/a" if is_na(r["Formal"]) else "pending (M7)"
+        formal = "n/a" if is_na(r["Formal"]) else (formal_feat.get(fid) or "—") if formal_feat else "pending (M7)"
         feats.append(f"| {fid} | {cstat} | {pstat} | {formal} |")
     # SO-1 cover properties: every simulation cover of the plan (Runs = sim or both), listed in a
     # feature or not, must be hit at least once (vplan §7). Excluded ones (vplan §8) don't count.
@@ -708,7 +760,7 @@ def run_annotate(vp: Vplan, mdl: Model, cov_path: Path, results_path: Path | Non
         f"| SO-1 coverage model | {so1} |",
         f"| SO-1 cover properties | {so1c} |",
         f"| SO-2 regression | {reg} |",
-        "| SO-3 formal | pending (M7) |",
+        f"| SO-3 formal | {so3} |",
         "",
         "## Coverage model (vplan §3)",
         "",
@@ -745,6 +797,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--annotate", action="store_true", help="write vplan_status.md from merged coverage")
     ap.add_argument("--cov", type=Path, help="--annotate: functional.json written by regress.py")
     ap.add_argument("--results", type=Path, help="--annotate: results.json written by regress.py")
+    ap.add_argument("--formal", type=Path, help="--annotate: signoff.json written by formal_run.py (M7)")
     ap.add_argument("--status-out", type=Path, help="--annotate: output (default: vplan_status.md next to the vplan)")
     ap.add_argument("--root", type=Path, action="append", default=[],
                     help="directory to search for code (repeatable; default: the block root, "
@@ -801,7 +854,7 @@ def main(argv: list[str] | None = None) -> int:
                   "run --structure first", file=sys.stderr)
             return 1
         out = args.status_out or args.vplan.parent / "vplan_status.md"
-        bad = run_annotate(vp, mdl, args.cov, args.results, out)
+        bad = run_annotate(vp, mdl, args.cov, args.results, out, args.formal)
         if args.strict and bad:
             print(f"vplan_check --annotate --strict: FAIL, {bad} hole(s) or missing item(s)   {repro}")
             rc = 1

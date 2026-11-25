@@ -1,0 +1,73 @@
+# formal/async_fifo.sby — SymbiYosys jobs for async_fifo (M7, sign-off SO-3; vplan §4, §5).
+# Normal use: `make formal TASK=<task> ASIZE=<n>` (common/scripts/formal_run.py writes a copy of
+# this file with the requested sizes and absolute source paths, RTL_DIR/DUT_SRCS included, runs
+# it under out/ and checks the log). Also runs as is from this directory at ASIZE=3, DSIZE=4:
+#   sby -f async_fifo.sby prove
+# The formal top is async_fifo itself: rtl/async_fifo_props.svh (included under
+# ASYNC_FIFO_PROPS) instantiates the e2e checker and holds the induction invariants.
+
+# Jobs. bmc/prove/cover/pdr are the sign-off set. bmc_spec checks the spec properties without
+# the invariants, so a failure names a spec label (with the invariants loaded, an invariant
+# usually fails first: seen on a planted bug in M7); it is for bugs (M8), which fail early, and
+# is shallow because without the invariants every unfailing step is slow (smtbmc assumes the
+# assertions it has already checked, so the invariants prune bmc too: 48 s to depth 40 at ASIZE=3
+# with them, more than 5 min for step 21 alone at ASIZE=2 without). Ledger audit (vplan §5): audit_a01/audit_a05
+# drop that assumption and run bmc on the spec properties only (no invariants, --keep-going lists
+# every failing label); audit_a02 drops A02 and runs k-induction with the invariants (a pass means
+# A02 is unnecessary for every property). prove_noinv/pdr_noinv remove the invariants: are they
+# needed, and does PDR find its own? Words after a task name are tags; a line prefix naming
+# several tasks is rejected (T17), so shared lines use tags: std = standard read, smt = plain
+# smtbmc, kind = k-induction, pdr_eng = ABC PDR, audit = bmc audit, noinv = no invariants,
+# bmcmode = plain bmc.
+[tasks]
+bmc std smt bmcmode
+bmc_spec noinv smt bmcmode
+prove std smt kind
+cover std smt
+pdr std pdr_eng
+audit_a01 audit
+audit_a05 audit
+audit_a02 smt kind
+prove_noinv noinv smt kind
+pdr_noinv noinv pdr_eng
+
+# Depths count formal steps, not clock cycles (each rising edge needs at least two steps).
+# kind: k-induction depth; the invariants make the state inductive, so it stays small.
+# cover: deep enough for two pointer wraps at ASIZE=3 (4*DEPTH = 32 reads; reached at step 74).
+# multiclock on: wclk/rclk are free inputs sampled every step (A04), async resets modeled.
+[options]
+bmcmode: mode bmc
+bmc: depth 40
+bmc_spec: depth 20
+kind: mode prove
+kind: depth 6
+cover: mode cover
+cover: depth 100
+pdr_eng: mode prove
+audit: mode bmc
+audit: depth 30
+multiclock on
+
+# Engines: yosys-smtbmc with yices; --keep-going for the bmc audits (report every failure);
+# ABC's PDR for the pdr_eng tasks (it finds its own invariants: a cross-check on ours).
+[engines]
+smt: smtbmc yices
+audit: smtbmc --keep-going yices
+pdr_eng: abc pdr
+
+# Read the checker and the RTL with FORMAL and the property include, plus each task's defines.
+# chparam sets the formal size (rewritten by formal_run.py).
+[script]
+std: read -formal -DASYNC_FIFO_PROPS async_fifo_e2e_props.sv async_fifo.sv
+audit_a01: read -formal -DASYNC_FIFO_PROPS -DFORMAL_NO_INV -DFORMAL_DROP_A01 async_fifo_e2e_props.sv async_fifo.sv
+audit_a05: read -formal -DASYNC_FIFO_PROPS -DFORMAL_NO_INV -DFORMAL_DROP_A05 async_fifo_e2e_props.sv async_fifo.sv
+audit_a02: read -formal -DASYNC_FIFO_PROPS -DFORMAL_DROP_A02 async_fifo_e2e_props.sv async_fifo.sv
+noinv: read -formal -DASYNC_FIFO_PROPS -DFORMAL_NO_INV async_fifo_e2e_props.sv async_fifo.sv
+chparam -set ASIZE 3 -set DSIZE 4 async_fifo
+prep -top async_fifo
+
+# Sources, copied flat into each task's src/ (the include resolves there).
+[files]
+../sva/async_fifo_e2e_props.sv
+../rtl/async_fifo.sv
+../rtl/async_fifo_props.svh

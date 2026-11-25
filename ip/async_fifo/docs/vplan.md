@@ -1,6 +1,6 @@
 # async_fifo — Verification plan
 
-**Version** 0.4 · **Date** 2026-11-24 · **Status** DRAFT: owner decisions applied (feature-table
+**Version** 0.5 · **Date** 2026-11-24 · **Status** DRAFT: owner decisions applied (feature-table
 edits, power-up-only resets, N = 200); full text awaiting owner review ·
 **Spec** [`spec.md`](spec.md) v1.1 · **RTL** `rtl/async_fifo.sv`, tag `rtl-v1`
 
@@ -28,7 +28,7 @@ rules (§1.3). Paths are relative to `ip/async_fifo/`.
 |---|---|---|---|
 | UVM simulation, Verilator (DEC-001) | `tb/uvm/` | M3–M5 | regression summary, merged functional coverage |
 | Assertions in simulation | `sva/async_fifo_e2e_props.sv`, `rtl/async_fifo_props.svh`; concurrent twins `sva/async_fifo_sva_concurrent.sv` (simulation only) | M6 | regression with every assertion enabled; negative tests `docs/sva_negative_tests.md` (`make sva-neg`) |
-| Formal: SBY, two clocks, k-induction (DEC-002) | `formal/async_fifo.sby` | M7 | prove and cover logs |
+| Formal: SBY, two clocks, k-induction (DEC-002, DEC-011) | `formal/async_fifo.sby`; harness under `FORMAL` in `rtl/async_fifo_props.svh` and `sva/async_fifo_e2e_props.sv` | M7 | `make formal-signoff` summary `docs/signoff/2026-11-24_m7_summary.md`; `docs/formal_notes.md` |
 | Planted bugs | `bugs/` | M8 | `docs/bug_matrix.md` |
 | Mutation testing, MCY | `mcy/` | M9 | `docs/mutation_report.md` |
 
@@ -308,6 +308,45 @@ row.
   carries the white-box properties only: it drives at falling edges, which the A02/A03 checks
   would reject.
 
+**As built (M7).**
+- **Harness.** The formal top is `async_fifo` itself, read with `ASYNC_FIFO_PROPS` and `FORMAL`.
+  `rtl/async_fifo_props.svh` instantiates the e2e checker, so the end-to-end and white-box
+  properties run together. The checker exports its state through `f_` output ports that exist
+  only under `FORMAL`: open-source Yosys has no hierarchical references, and a hierarchical name
+  silently becomes a free, undriven wire (toolchain T18; `make formal` fails on that warning).
+  Each file declares its own `(* gclk *)` register (T18).
+- **Clocks and resets.** `wclk` and `rclk` are free inputs sampled every formal step (A04,
+  DEC-011 D1). A01 is an initial-state assumption. A02's formal form: a reset rises only in a
+  step where its own clock rises. At that edge the async-reset flops still act as in reset, as in
+  simulation (toolchain T17, DEC-011 D3), so the §4 wording needed no change. A05: once released,
+  a reset never falls.
+- **A03 in the step model.** Not adopted (DEC-011 D2). Its formal form exists behind the define
+  `FORMAL_A03`: an input changes only in a step where its own clock rises. That edge samples the
+  previous step, so the new value is first seen at the next edge, which is what "right after a
+  rising edge" means here.
+- **History without `$past` on design clocks.** F04, F05, F09 and F14 compare with the previous
+  edge through named registers (`p_*_q` in the white-box file, `r_acc_q` and `r_rdata_q` in the
+  checker) that hold exactly what `$past` held, so induction invariants can constrain them
+  (toolchain T15). Simulation is unchanged: `make sva-neg` 25/25 and the SO-2 regression re-run
+  1,600/1,600 after the change.
+- **F02 and F03.** The tracked index is an `anyconst` modulo 2·DEPTH, so every write in every
+  lap is a candidate. The checker captures the data of the accepted writes with that index and
+  the next one, and checks the reads with the same indexes. The read of the second must follow
+  an intact read of the first (the two-value technique, with no `anyconst` data).
+- **Invariants.** 25 `inv_` assertions: 19 white-box in `rtl/async_fifo_props.svh`, 6 in the
+  checker. They are listed with their reasons in `docs/formal_notes.md`. With them, k-induction
+  closes at depth 6. Without them (task `prove_noinv`) it fails on
+  `ast_F06_wfull_not_optimistic`. The define `FORMAL_NO_INV` removes them.
+- **Tasks** (`formal/async_fifo.sby`, `make formal TASK=<task> ASIZE=<n>`). `bmc` is bounded
+  (depth 40) with everything loaded. `bmc_spec` checks the spec properties without the
+  invariants, so a failure names a spec label (with the invariants loaded, an invariant usually
+  fails first, as on the M7 planted-bug check); it is meant for bugs (M8) and stays shallow,
+  because without the invariants each step that does not fail is slow. `prove` is k-induction with
+  the invariants (SO-3). `cover` reaches every cover. `pdr` runs ABC's PDR on everything.
+  `audit_a01`/`audit_a05` (bmc, spec properties only, every failing label listed) and `audit_a02`
+  (k-induction) drop one assumption each. `make formal-signoff` runs them all at ASIZE 2 and 3,
+  plus `prove_noinv` and `pdr_noinv`.
+
 ---
 
 ## 5. Assumption ledger
@@ -320,8 +359,8 @@ an assertion on the testbench (§4, `asm_`). Adding or changing a row needs the 
 | ID | Assumption | Why it is realistic | Formal | Simulation | Status |
 |---|---|---|---|---|---|
 | A01 | Both resets are asserted (0) together at time 0 (power-up). | One power-on reset source feeds both reset synchronizers (spec §8). | `asm_A01_resets_low_at_start` (initial state) | `asm_A01_resets_low_at_start`: both resets are 0 at the first rising edge of either clock (DEC-010) | active |
-| A02 | Each reset is released synchronously to its own clock: `wrst_n` rises only with a rising `wclk` edge, `rrst_n` only with a rising `rclk` edge. | Reset synchronizers (asynchronous assert, synchronous release) are the integrator's job (spec §8). | `asm_A02_wrst_release_on_wclk`<br>`asm_A02_rrst_release_on_rclk` | `asm_A02_wrst_release_on_wclk`<br>`asm_A02_rrst_release_on_rclk`: each rising reset edge must fall in the time step of a rising edge of its clock | active |
-| A03 | `winc`/`wdata` change only in the formal step right after a rising `wclk` edge; `rinc` likewise for `rclk`. | Inputs come from flops on their own clock (spec §3). The DUT samples them only at rising edges and has no combinational path from input to output, so changes between edges are invisible to it. The assumption only shrinks traces. | `asm_A03_w_inputs_after_wclk`<br>`asm_A03_r_inputs_after_rclk` (adopted only if M7 needs it) | `asm_A03_w_inputs_after_wclk`<br>`asm_A03_r_inputs_after_rclk`: inputs change only in the time step of a rising edge of their own clock (requires drivers that drive at that edge, M3) | optional |
+| A02 | Each reset is released synchronously to its own clock: `wrst_n` rises only with a rising `wclk` edge, `rrst_n` only with a rising `rclk` edge. | Reset synchronizers (asynchronous assert, synchronous release) are the integrator's job (spec §8). | `asm_A02_wrst_release_on_wclk`<br>`asm_A02_rrst_release_on_rclk` (M7 audit: every property is proven without it; see below) | `asm_A02_wrst_release_on_wclk`<br>`asm_A02_rrst_release_on_rclk`: each rising reset edge must fall in the time step of a rising edge of its clock | active |
+| A03 | `winc`/`wdata` change only in the formal step right after a rising `wclk` edge; `rinc` likewise for `rclk`. | Inputs come from flops on their own clock (spec §3). The DUT samples them only at rising edges and has no combinational path from input to output, so changes between edges are invisible to it. The assumption only shrinks traces. | `asm_A03_w_inputs_after_wclk`<br>`asm_A03_r_inputs_after_rclk` (not adopted, DEC-011 D2: behind the define `FORMAL_A03`, off; M7 did not need it) | `asm_A03_w_inputs_after_wclk`<br>`asm_A03_r_inputs_after_rclk`: inputs change only in the time step of a rising edge of their own clock (requires drivers that drive at that edge, M3) | optional |
 | A04 | Clocks are unconstrained: any interleaving of rising edges, including coincident edges and arbitrarily long gaps. | Strictly more general than any real pair of clocks, and enough for safety properties (no fairness needed). | n/a: no constraint; `wclk` and `rclk` are free inputs sampled every formal step. The F15 covers show the freedom is real. | n/a: simulated clocks (1:4 to 4:1) are a subset | modeling |
 | A05 | No reset after power-up: once `wrst_n` (`rrst_n`) has risen, it stays 1. | Owner decision DEC-007: mid-operation resets are out of scope (spec §8, v1.1). | `asm_A05_wrst_stays_released`<br>`asm_A05_rrst_stays_released` | `asm_A05_wrst_stays_released`<br>`asm_A05_rrst_stays_released` | active |
 | A06 | Inputs are known (0 or 1) whenever their side is out of reset, and they meet setup and hold on their own clock. | X on inputs and timing violations are out of scope (spec §3, §12). | n/a: formal is two-valued and samples inputs exactly at the edge | `asm_A06_w_inputs_known`<br>`asm_A06_r_inputs_known` (Verilator is two-state, so these can only fire in a four-state simulator) | active |
@@ -334,7 +373,21 @@ results:
 - **A05:** a reset re-asserted on one side only. F06 and F07 fail because the checker's counts
   and the DUT disagree.
 
-M7 records the actual results here.
+**Results (M7, `make formal-signoff`, ASIZE 2 and 3, the same at both sizes).** The A01 and A05
+runs are bmc on the spec properties only (no invariants, `--keep-going`, depth 30), so every
+failing label is listed. The A02 run is k-induction with the invariants.
+- **A01 dropped: fails, as expected.** 17 assertions fail: F02–F08, F09(a), F10, F12 and F14,
+  F06 and F07 among them. F01 does not fail: an initial state with a reset asserted still forces
+  the reset values (asynchronous reset), and with no reset at all its checks never run.
+- **A02 dropped: every property still proves** (k-induction passes, 1.5 s and 1.7 s). The RTL
+  tolerates any release timing in the formal model. Following the rule above, A02 is a candidate
+  for retirement from formal, but it stays a physical requirement: an asynchronous release near a
+  clock edge is a recovery/removal violation that can go metastable, which neither RTL simulation
+  nor formal models (plan R11). **Owner decision pending**; until then A02 stays active.
+- **A05 dropped: fails, as expected.** 11 assertions fail: F02, F03, F06, F07, F09(b), F11, F12
+  and F14. A one-sided reset makes the checker's counts and the DUT's pointers disagree (F06,
+  F07), and its asynchronous assertion changes registers between clock edges (F09b, F11, F14
+  gclk).
 
 ---
 
@@ -367,7 +420,7 @@ checks this plan expects to catch it.
 |---|---|---|
 | SO-1 | 100% of the coverage model (§3), merged across all seeds and clock ratios, and every simulation cover property (`cov_`, Runs = sim or both) hit at least once. Exclusions only through §8. | Merged coverage report (M5), `docs/vplan_status.md` |
 | SO-2 | Zero failures over N seeds per test, for every test in `regress/tests.toml`. Scoreboard, all assertions (`ASYNC_FIFO_PROPS` plus the e2e checker) and the simulated assumptions (`asm_`) are enabled. | Sign-off regression summary (M5 + M6) |
-| SO-3 | Every formal assertion (Runs = formal or both) proven unbounded by k-induction, and every formal cover reached, at ASIZE = 2 and 3 (DSIZE = 4). Assumption audit done. | SBY prove and cover logs (M7) |
+| SO-3 | Every formal assertion (Runs = formal or both) proven unbounded by k-induction, and every formal cover reached, at ASIZE = 2 and 3 (DSIZE = 4). Assumption audit done. | `make formal-signoff` (M7): `docs/signoff/2026-11-24_m7_summary.md`, `docs/vplan_status.md` |
 | Q-1 | Reported: the detection matrix for the planted bugs (§6), comparing scoreboard-only simulation, simulation with SVA, and formal. | `docs/bug_matrix.md` (M8) |
 | Q-2 | Reported: the MCY mutation score per method, with its seed, and an explanation for every surviving mutant. | `docs/mutation_report.md` (M9) |
 
@@ -430,3 +483,4 @@ From spec §12, plus limits of the methods used:
 | 0.2 | 2026-11-24 | Claude | M4: §2.2 test rows carry the approved stimulus parameters and their stimulus self-checks (DEC-009: 50% integer ratios in the thrash tests, thrash divisor d ∈ [7, 10] after measurement, thrash length max(4·DEPTH, 64), `S5_SHORT`). No feature, coverage or property change. |
 | 0.3 | 2026-11-24 | Claude | M5: F16 stimulus adds the directed aligned thrash entries (closure H02). §2.2 describes the directed entries, per-test seeding (H01) and the thrash reset wait (H03). §3 records how the coverage model was built (helper `cp_bucket`, `int_ratio` bin name, sampling hooks, the limit of `cp_phase`). §7 has the measured run time. No bin, check or property changed. |
 | 0.4 | 2026-11-24 | Claude | M6: properties coded. §1.2 adds the concurrent twins and the negative tests. §4: A01's simulation form is "at the first rising edge of either clock" (owner, DEC-010; the old wording fails on a legal testbench whose `rrst_n` is released before `wclk` first rises); "As built (M6)" notes (sampling, true fill, the F08 window and reset guards, history, assumption checks, failure messages, negative tests). §5 A01 Simulation cell matches. No intent weakened, no bin, check or assumption added or removed. |
+| 0.5 | 2026-11-24 | Claude | M7: formal. §1.2 formal row (harness files, evidence). §4 "As built (M7)" (harness inside the DUT, A02 and A03 in the formal step model, named history registers instead of `$past` on design clocks, F02/F03 tracking, 25 induction invariants, SBY tasks). §5: A03 not adopted (DEC-011 D2); audit results recorded; A02 found unnecessary in formal (retirement is the owner's decision). §7 SO-3 evidence. No intent weakened; no bin, check or assumption added or removed. |

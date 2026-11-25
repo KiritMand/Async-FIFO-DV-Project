@@ -9,8 +9,12 @@
 // (spec §5), because all registers here and in the DUT update with non-blocking assignments;
 // a register of the other domain that changes at the same instant still shows its old value,
 // which is the spec's coincident-edge rule.
-// Formal-only properties (vplan Runs = formal) and the formal (gclk) forms of the asm_A02/A03/A05
-// checks are added in M7 under `ifdef FORMAL`.
+// Under `ifdef FORMAL (M7): the formal forms of the asm_ assumptions (initial state and gclk),
+// the formal-only properties (vplan Runs = formal), checker-only induction invariants (inv_
+// labels), and f_ output ports that export checker state to the white-box invariants in
+// rtl/async_fifo_props.svh, which instantiates this checker inside the DUT for formal.
+// Formal switches (defines): FORMAL_A03 adopts optional assumption A03 (off, DEC-011 D2);
+// FORMAL_DROP_A01/A02/A05 drop one assumption for the ledger audit (vplan §5).
 
 `default_nettype none
 
@@ -42,6 +46,20 @@ module async_fifo_e2e_props #(
   input  wire logic             rempty,
   output      logic [ASIZE:0]   wr_cnt,  // accepted writes since reset, mod 2*DEPTH (like wbin)
   output      logic [ASIZE:0]   rd_cnt   // accepted reads since reset, mod 2*DEPTH (like rbin)
+`ifdef FORMAL
+  // Formal-only exports (M7): checker state the white-box induction invariants tie to the DUT.
+  ,
+  output      logic [ASIZE:0]          f_rd_cnt_at_w,   // rd_cnt as the latest wclk edge sampled it
+  output      logic [$clog2(K+2)-1:0]  f_w_after_rd_q,  // wclk edges since the latest read (sat.)
+  output      logic [ASIZE:0]          f_wr_cnt_at_r,   // wr_cnt as the latest rclk edge sampled it
+  output      logic [$clog2(K+2)-1:0]  f_r_after_wr_q,  // rclk edges since the latest write (sat.)
+  output      logic [ASIZE+2:0]        f_rd_total,      // accepted reads, saturating at 4*DEPTH
+  output      logic [ASIZE:0]          f_idx,           // tracked write index (anyconst, F02/F03)
+  output      logic                    f_have1,         // write f_idx has been accepted
+  output      logic [DSIZE-1:0]        f_d1,            // its data (latest lap)
+  output      logic                    f_pair,          // write f_idx+1 followed it (F03 armed)
+  output      logic [DSIZE-1:0]        f_d2             // data of write f_idx+1 (latest lap)
+`endif
 );
 
   // Constants at the width they are compared with (no width warnings, portable to Yosys).
@@ -118,8 +136,9 @@ module async_fifo_e2e_props #(
       r_after_wr_q <= r_after_wr;
     end
 
-  // Read-side history: r_pv is 1 once the previous rclk edge was out of reset, so $past refers
-  // to a real, out-of-reset edge; r_seen_full records that fill has reached DEPTH (F12 cover).
+  // Read-side history: r_pv is 1 once the previous rclk edge was out of reset, so the history
+  // registers hold a real, out-of-reset edge; r_seen_full records that fill has reached DEPTH
+  // (F12 cover).
   logic r_pv, r_seen_full;
   always @(posedge rclk or negedge rrst_n)
     if (!rrst_n) begin
@@ -129,6 +148,15 @@ module async_fifo_e2e_props #(
       r_pv        <= 1'b1;
       if (fill == FILL_FULL) r_seen_full <= 1'b1;
     end
+
+  // Edge-to-edge history for F14: what $past would return at the next rclk edge (r_acc and rdata
+  // just before the previous edge). Named rather than $past so M7's invariants can constrain them.
+  logic             r_acc_q;
+  logic [DSIZE-1:0] r_rdata_q;
+  always @(posedge rclk) begin
+    r_acc_q   <= r_acc;
+    r_rdata_q <= rdata;
+  end
 
   // ---------------------------------------------------------------------------------------
   // Write-domain properties (posedge wclk)
@@ -192,9 +220,9 @@ module async_fifo_e2e_props #(
           `E2E_ELSE(("rempty=%0b at fill=%0d, no write for > K rclk edges", rempty, fill));
       // Show-ahead: with data present and no read accepted at the previous edge, rdata has not
       // changed since that edge, whatever the write side did meanwhile (spec R3).
-      if (r_pv && !rempty && !$past(r_acc))
-        ast_F14_rdata_stable: assert (rdata == $past(rdata))
-          `E2E_ELSE(("rdata changed from %0h to %0h with no read", $past(rdata), rdata));
+      if (r_pv && !rempty && !r_acc_q)
+        ast_F14_rdata_stable: assert (rdata == r_rdata_q)
+          `E2E_ELSE(("rdata changed from %0h to %0h with no read", r_rdata_q, rdata));
 
       // Covers: a blocked read at true empty; flag lag and its (K-1)-th-edge tightness; empty
       // again after full; two pointer wraps; rdata held while writes arrive; reader released first.
@@ -203,7 +231,7 @@ module async_fifo_e2e_props #(
       cov_F08_rempty_lag_k_minus_1: cover (wrst_n && r_after_wr == KV && rempty && fill != '0);
       cov_F12_empty_after_full: cover (r_seen_full && fill == '0 && rempty);
       cov_F13_two_wraps: cover (rd_total == TWO_WRAPS);
-      cov_F14_hold_while_writing: cover (r_pv && !rempty && !$past(r_acc) && wr_moved_r && rdata == $past(rdata));
+      cov_F14_hold_while_writing: cover (r_pv && !rempty && !r_acc_q && wr_moved_r && rdata == r_rdata_q);
       cov_F17_rd_released_first: cover (!wrst_n);
 `ifndef FORMAL
       // A06 (simulation only), read side.
@@ -249,6 +277,137 @@ module async_fifo_e2e_props #(
   always @(wrst_n) if (w_released) asm_A05_wrst_stays_released: `E2E_ASM (wrst_n);
   always @(rrst_n) if (r_released) asm_A05_rrst_stays_released: `E2E_ASM (rrst_n);
   /* verilator lint_on PROCASSINIT */
+`else
+  // =======================================================================================
+  // Formal (M7): environment, formal-only properties, checker-only invariants, exports
+  // =======================================================================================
+
+  // Global formal step (multiclock on) and its past-valid flag for $past/$rose on step 0.
+  (* gclk *) reg f_gclk;
+  reg f_pv = 1'b0;
+  always @(posedge f_gclk) f_pv <= 1'b1;
+
+  // Environment (vplan §5). A01: both resets asserted in the initial state (power-up).
+`ifndef FORMAL_DROP_A01
+  initial asm_A01_resets_low_at_start: assume (!wrst_n && !rrst_n);
+`endif
+
+  // A02: a reset rises only in a step where its own clock rises (as a reset synchronizer does;
+  // toolchain T17: the flops still act as in reset at that edge, as in simulation).
+  // A05: once released, a reset stays released (DEC-007).
+  always @(posedge f_gclk) if (f_pv) begin
+`ifndef FORMAL_DROP_A02
+    if ($rose(wrst_n)) asm_A02_wrst_release_on_wclk: assume ($rose(wclk));
+    if ($rose(rrst_n)) asm_A02_rrst_release_on_rclk: assume ($rose(rclk));
+`endif
+`ifndef FORMAL_DROP_A05
+    if ($past(wrst_n)) asm_A05_wrst_stays_released: assume (wrst_n);
+    if ($past(rrst_n)) asm_A05_rrst_stays_released: assume (rrst_n);
+`endif
+  end
+
+  // A03 (optional, not adopted: DEC-011 D2): inputs change only in a step where their own clock
+  // rises. That edge samples the previous step, so the new value is first seen at the next edge.
+`ifdef FORMAL_A03
+  always @(posedge f_gclk) if (f_pv) begin
+    if ($changed(winc) || $changed(wdata)) asm_A03_w_inputs_after_wclk: assume ($rose(wclk));
+    if ($changed(rinc)) asm_A03_r_inputs_after_rclk: assume ($rose(rclk));
+  end
+`endif
+
+  // ---- Tracked writes (F02, F03; the two-value technique). f_idx_c is an arbitrary index
+  // mod 2*DEPTH, so every write, in every lap, is a candidate. Write side: capture the data of
+  // each accepted write with index f_idx_c (first) and f_idx_c+1 (second); the pair is armed
+  // only once a first exists, so it is always two consecutive writes.
+  (* anyconst *) reg [ASIZE:0] f_idx_c;
+  wire [ASIZE:0]    f_idx2 = f_idx_c + 1'b1;
+  logic             f_have1_r, f_pair_r, f_first_ok;
+  logic [DSIZE-1:0] f_d1_r, f_d2_r;
+  always @(posedge wclk or negedge wrst_n)
+    if (!wrst_n) begin
+      f_have1_r <= 1'b0;
+      f_pair_r  <= 1'b0;
+    end else if (w_acc) begin
+      if (wr_cnt == f_idx_c)            f_have1_r <= 1'b1;
+      if (wr_cnt == f_idx2 && f_have1_r) f_pair_r <= 1'b1;
+    end
+  always @(posedge wclk)
+    if (w_acc) begin
+      if (wr_cnt == f_idx_c)             f_d1_r <= wdata;
+      if (wr_cnt == f_idx2 && f_have1_r) f_d2_r <= wdata;
+    end
+
+  // Read side: remember whether the read of the first tracked index returned its data intact.
+  always @(posedge rclk or negedge rrst_n)
+    if (!rrst_n)                          f_first_ok <= 1'b0;
+    else if (r_acc && rd_cnt == f_idx_c) f_first_ok <= f_have1_r && rdata == f_d1_r;
+
+  // F02: the read with the tracked index returns the tracked data. F03: the read of the second
+  // index returns its data, right after the first came back intact (order). Covers: both reached.
+  always @(posedge rclk) if (rrst_n) begin
+    if (r_acc && rd_cnt == f_idx_c && f_have1_r)
+      ast_F02_tracked_word: assert (rdata == f_d1_r);
+    if (r_acc && rd_cnt == f_idx2 && f_pair_r)
+      ast_F03_tracked_pair_order: assert (f_first_ok && rdata == f_d2_r);
+    cov_F02_tracked_word_read: cover (r_acc && rd_cnt == f_idx_c && f_have1_r);
+    cov_F03_tracked_pair_read: cover (r_acc && rd_cnt == f_idx2 && f_pair_r && f_first_ok);
+  end
+
+  // ---- Every-step properties and covers (clock gclk).
+  // Rising-edge run lengths for the burst covers: rising edges of one clock since the latest
+  // rising edge of the other, counted only while both resets are released (saturate at 5).
+  reg [2:0] f_wburst = 3'd0, f_rburst = 3'd0;
+  always @(posedge f_gclk) begin
+    if (!wrst_n || !rrst_n || $rose(rclk)) f_wburst <= 3'd0;
+    else if ($rose(wclk) && f_wburst != 3'd5) f_wburst <= f_wburst + 3'd1;
+    if (!wrst_n || !rrst_n || $rose(wclk)) f_rburst <= 3'd0;
+    else if ($rose(rclk) && f_rburst != 3'd5) f_rburst <= f_rburst + 3'd1;
+  end
+
+  // F14 every step: with data present, rdata changes only in a step where rclk rises (a write
+  // landing on the head entry between rclk edges would show here). F15: coincident edges and
+  // five-edge bursts. F16: an accepted write and an accepted read in the same step at fill 1 and
+  // DEPTH-1 (the edge samples the previous step, hence $past).
+  always @(posedge f_gclk) if (f_pv) begin
+    if (!rempty && $changed(rdata)) ast_F14_rdata_stable_gclk: assert ($rose(rclk));
+    cov_F15_same_step_edges: cover ($rose(wclk) && $rose(rclk) && wrst_n && rrst_n);
+    cov_F15_wclk_burst: cover (f_wburst == 3'd5);
+    cov_F15_rclk_burst: cover (f_rburst == 3'd5);
+    cov_F16_rw_at_one: cover ($rose(wclk) && $rose(rclk) && $past(w_acc) && $past(r_acc)
+                              && $past(fill) == {{ASIZE{1'b0}}, 1'b1});
+    cov_F16_rw_at_depth_m1: cover ($rose(wclk) && $rose(rclk) && $past(w_acc) && $past(r_acc)
+                                   && $past(fill) == FILL_FULL - 1'b1);
+  end
+
+  // ---- Checker-only induction invariants (inv_ labels: proof aids, checked every step;
+  // FORMAL_NO_INV removes them, as in rtl/async_fifo_props.svh).
+`ifndef FORMAL_NO_INV
+  // Edge counters stay in range; rd_total mirrors rd_cnt until it saturates, and "no read yet"
+  // means the write side has sampled nothing but 0; F14's history equals rdata while the head
+  // entry is held; a pair is armed only after its first write; after the first tracked index was
+  // read in a lap, its read came back intact.
+  always @(*) begin
+    inv_e2e_edge_counters: assert (w_after_rd_q != '0 && w_after_rd_q <= SAT
+                                   && r_after_wr_q != '0 && r_after_wr_q <= SAT);
+    inv_e2e_rd_total: assert (rd_total <= TWO_WRAPS && (rd_total == TWO_WRAPS || rd_total[ASIZE:0] == rd_cnt));
+    if (rd_total == '0) inv_e2e_no_read_yet: assert (rd_cnt_at_w == '0);
+    if (r_pv && !rempty && !r_acc_q) inv_e2e_head_held: assert (rdata == r_rdata_q);
+    if (f_pair_r) inv_e2e_pair_after_first: assert (f_have1_r);
+    if (f_have1_r && rd_cnt == f_idx2) inv_e2e_first_ok: assert (f_first_ok);
+  end
+`endif
+
+  // Exports for the white-box invariants (rtl/async_fifo_props.svh).
+  assign f_rd_cnt_at_w  = rd_cnt_at_w;
+  assign f_w_after_rd_q = w_after_rd_q;
+  assign f_wr_cnt_at_r  = wr_cnt_at_r;
+  assign f_r_after_wr_q = r_after_wr_q;
+  assign f_rd_total     = rd_total;
+  assign f_idx          = f_idx_c;
+  assign f_have1        = f_have1_r;
+  assign f_d1           = f_d1_r;
+  assign f_pair         = f_pair_r;
+  assign f_d2           = f_d2_r;
 `endif
 
 endmodule

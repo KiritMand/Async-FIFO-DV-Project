@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="850" height="344" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="11">
+<rect width="850" height="344" fill="#ffffff"/>
+<text x="8" y="20" font-size="13" font-weight="bold" fill="#1f2933">Formal cover cov_F12_empty_after_full: fill -&gt; full -&gt; drain (ASIZE=2, DSIZE=4); one column per formal step</text>
+<line x1="150" y1="30" x2="150" y2="320" stroke="#d9dee5"/>
+<text x="152" y="336" fill="#6b7785" font-size="9">0</text>
+<line x1="176" y1="30" x2="176" y2="320" stroke="#d9dee5"/>
+<line x1="202" y1="30" x2="202" y2="320" stroke="#d9dee5"/>
+<text x="204" y="336" fill="#6b7785" font-size="9">2</text>
+<line x1="228" y1="30" x2="228" y2="320" stroke="#d9dee5"/>
+<line x1="254" y1="30" x2="254" y2="320" stroke="#d9dee5"/>
+<text x="256" y="336" fill="#6b7785" font-size="9">4</text>
+<line x1="280" y1="30" x2="280" y2="320" stroke="#d9dee5"/>
+<line x1="306" y1="30" x2="306" y2="320" stroke="#d9dee5"/>
+<text x="308" y="336" fill="#6b7785" font-size="9">6</text>
+<line x1="332" y1="30" x2="332" y2="320" stroke="#d9dee5"/>
+<line x1="358" y1="30" x2="358" y2="320" stroke="#d9dee5"/>
+<text x="360" y="336" fill="#6b7785" font-size="9">8</text>
+<line x1="384" y1="30" x2="384" y2="320" stroke="#d9dee5"/>
+<line x1="410" y1="30" x2="410" y2="320" stroke="#d9dee5"/>
+<text x="412" y="336" fill="#6b7785" font-size="9">10</text>
+<line x1="436" y1="30" x2="436" y2="320" stroke="#d9dee5"/>
+<line x1="462" y1="30" x2="462" y2="320" stroke="#d9dee5"/>
+<text x="464" y="336" fill="#6b7785" font-size="9">12</text>
+<line x1="488" y1="30" x2="488" y2="320" stroke="#d9dee5"/>
+<line x1="514" y1="30" x2="514" y2="320" stroke="#d9dee5"/>
+<text x="516" y="336" fill="#6b7785" font-size="9">14</text>
+<line x1="540" y1="30" x2="540" y2="320" stroke="#d9dee5"/>
+<line x1="566" y1="30" x2="566" y2="320" stroke="#d9dee5"/>
+<text x="568" y="336" fill="#6b7785" font-size="9">16</text>
+<line x1="592" y1="30" x2="592" y2="320" stroke="#d9dee5"/>
+<line x1="618" y1="30" x2="618" y2="320" stroke="#d9dee5"/>
+<text x="620" y="336" fill="#6b7785" font-size="9">18</text>
+<line x1="644" y1="30" x2="644" y2="320" stroke="#d9dee5"/>
+<text x="8" y="52" fill="#1f2933">wclk</text>
+<polyline points="150,54 176,54 176,38 202,38 202,54 228,54 228,38 254,38 254,54 280,54 280,38 306,38 306,54 332,54 332,38 358,38 358,54 384,54 384,38 410,38 410,38 436,38 436,54 462,54 462,54 488,54 488,38 514,38 514,54 540,54 540,38 566,38 566,54 592,54 592,38 618,38 618,54 644,54 644,54 670,54" fill="none" stroke="#1d5fbf" stroke-width="1.6"/>
+<text x="8" y="78" fill="#1f2933">wrst_n</text>
+<polyline points="150,80 176,80 176,64 202,64 202,64 228,64 228,64 254,64 254,64 280,64 280,64 306,64 306,64 332,64 332,64 358,64 358,64 384,64 384,64 410,64 410,64 436,64 436,64 462,64 462,64 488,64 488,64 514,64 514,64 540,64 540,64 566,64 566,64 592,64 592,64 618,64 618,64 644,64 644,64 670,64" fill="none" stroke="#1d5fbf" stroke-width="1.6"/>
+<text x="8" y="104" fill="#1f2933">winc</text>
+<polyline points="150,106 176,106 176,106 202,106 202,90 228,90 228,106 254,106 254,90 280,90 280,106 306,106 306,90 332,90 332,90 358,90 358,90 384,90 384,90 410,90 410,90 436,90 436,90 462,90 462,90 488,90 488,90 514,90 514,90 540,90 540,90 566,90 566,90 592,90 592,106 618,106 618,106 644,106 644,106 670,106" fill="none" stroke="#1d5fbf" stroke-width="1.6"/>
+<text x="8" y="130" fill="#1f2933">wfull</text>
+<polyline points="150,132 176,132 176,132 202,132 202,132 228,132 228,132 254,132 254,132 280,132 280,132 306,132 306,132 332,132 332,132 358,132 358,132 384,132 384,116 410,116 410,116 436,116 436,116 462,116 462,116 488,116 488,116 514,116 514,116 540,116 540,116 566,116 566,116 592,116 592,132 618,132 618,132 644,132 644,132 670,132" fill="none" stroke="#1d5fbf" stroke-width="1.6"/>
+<text x="8" y="156" fill="#1f2933">wbin</text>
+<rect x="151" y="142" width="76" height="16" rx="3" fill="#e8f0fb" stroke="#1d5fbf"/>
+<text x="189.0" y="154" text-anchor="middle" fill="#1f2933">0</text>
+<rect x="229" y="142" width="50" height="16" rx="3" fill="#e8f0fb" stroke="#1d5fbf"/>
+<text x="254.0" y="154" text-anchor="middle" fill="#1f2933">1</text>
+<rect x="281" y="142" width="50" height="16" rx="3" fill="#e8f0fb" stroke="#1d5fbf"/>
+<text x="306.0" y="154" text-anchor="middle" fill="#1f2933">2</text>
+<rect x="333" y="142" width="50" height="16" rx="3" fill="#e8f0fb" stroke="#1d5fbf"/>
+<text x="358.0" y="154" text-anchor="middle" fill="#1f2933">3</text>
+<rect x="385" y="142" width="284" height="16" rx="3" fill="#e8f0fb" stroke="#1d5fbf"/>
+<text x="527.0" y="154" text-anchor="middle" fill="#1f2933">4</text>
+<text x="8" y="182" fill="#1f2933">rclk</text>
+<polyline points="150,184 176,184 176,168 202,168 202,184 228,184 228,184 254,184 254,168 280,168 280,184 306,184 306,168 332,168 332,184 358,184 358,168 384,168 384,184 410,184 410,168 436,168 436,184 462,184 462,168 488,168 488,184 514,184 514,168 540,168 540,184 566,184 566,168 592,168 592,184 618,184 618,168 644,168 644,168 670,168" fill="none" stroke="#1d5fbf" stroke-width="1.6"/>
+<text x="8" y="208" fill="#1f2933">rrst_n</text>
+<polyline points="150,210 176,210 176,194 202,194 202,194 228,194 228,194 254,194 254,194 280,194 280,194 306,194 306,194 332,194 332,194 358,194 358,194 384,194 384,194 410,194 410,194 436,194 436,194 462,194 462,194 488,194 488,194 514,194 514,194 540,194 540,194 566,194 566,194 592,194 592,194 618,194 618,194 644,194 644,194 670,194" fill="none" stroke="#1d5fbf" stroke-width="1.6"/>
+<text x="8" y="234" fill="#1f2933">rinc</text>
+<polyline points="150,220 176,220 176,220 202,220 202,220 228,220 228,236 254,236 254,236 280,236 280,220 306,220 306,220 332,220 332,220 358,220 358,236 384,236 384,220 410,220 410,236 436,236 436,220 462,220 462,220 488,220 488,220 514,220 514,236 540,236 540,220 566,220 566,236 592,236 592,236 618,236 618,236 644,236 644,236 670,236" fill="none" stroke="#1d5fbf" stroke-width="1.6"/>
+<text x="8" y="260" fill="#1f2933">rempty</text>
+<polyline points="150,246 176,246 176,246 202,246 202,246 228,246 228,246 254,246 254,246 280,246 280,246 306,246 306,246 332,246 332,246 358,246 358,262 384,262 384,262 410,262 410,262 436,262 436,262 462,262 462,262 488,262 488,262 514,262 514,262 540,262 540,262 566,262 566,246 592,246 592,246 618,246 618,246 644,246 644,246 670,246" fill="none" stroke="#1d5fbf" stroke-width="1.6"/>
+<text x="8" y="286" fill="#1f2933">rbin</text>
+<rect x="151" y="272" width="258" height="16" rx="3" fill="#e8f0fb" stroke="#1d5fbf"/>
+<text x="280.0" y="284" text-anchor="middle" fill="#1f2933">0</text>
+<rect x="411" y="272" width="50" height="16" rx="3" fill="#e8f0fb" stroke="#1d5fbf"/>
+<text x="436.0" y="284" text-anchor="middle" fill="#1f2933">1</text>
+<rect x="463" y="272" width="50" height="16" rx="3" fill="#e8f0fb" stroke="#1d5fbf"/>
+<text x="488.0" y="284" text-anchor="middle" fill="#1f2933">2</text>
+<rect x="515" y="272" width="50" height="16" rx="3" fill="#e8f0fb" stroke="#1d5fbf"/>
+<text x="540.0" y="284" text-anchor="middle" fill="#1f2933">3</text>
+<rect x="567" y="272" width="102" height="16" rx="3" fill="#e8f0fb" stroke="#1d5fbf"/>
+<text x="618.0" y="284" text-anchor="middle" fill="#1f2933">4</text>
+<text x="8" y="312" fill="#1f2933">fill (checker)</text>
+<rect x="151" y="298" width="76" height="16" rx="3" fill="#e8f0fb" stroke="#1d5fbf"/>
+<text x="189.0" y="310" text-anchor="middle" fill="#1f2933">0</text>
+<rect x="229" y="298" width="50" height="16" rx="3" fill="#e8f0fb" stroke="#1d5fbf"/>
+<text x="254.0" y="310" text-anchor="middle" fill="#1f2933">1</text>
+<rect x="281" y="298" width="50" height="16" rx="3" fill="#e8f0fb" stroke="#1d5fbf"/>
+<text x="306.0" y="310" text-anchor="middle" fill="#1f2933">2</text>
+<rect x="333" y="298" width="50" height="16" rx="3" fill="#e8f0fb" stroke="#1d5fbf"/>
+<text x="358.0" y="310" text-anchor="middle" fill="#1f2933">3</text>
+<rect x="385" y="298" width="24" height="16" rx="3" fill="#e8f0fb" stroke="#1d5fbf"/>
+<text x="397.0" y="310" text-anchor="middle" fill="#1f2933">4</text>
+<rect x="411" y="298" width="50" height="16" rx="3" fill="#e8f0fb" stroke="#1d5fbf"/>
+<text x="436.0" y="310" text-anchor="middle" fill="#1f2933">3</text>
+<rect x="463" y="298" width="50" height="16" rx="3" fill="#e8f0fb" stroke="#1d5fbf"/>
+<text x="488.0" y="310" text-anchor="middle" fill="#1f2933">2</text>
+<rect x="515" y="298" width="50" height="16" rx="3" fill="#e8f0fb" stroke="#1d5fbf"/>
+<text x="540.0" y="310" text-anchor="middle" fill="#1f2933">1</text>
+<rect x="567" y="298" width="102" height="16" rx="3" fill="#e8f0fb" stroke="#1d5fbf"/>
+<text x="618.0" y="310" text-anchor="middle" fill="#1f2933">0</text>
+</svg>

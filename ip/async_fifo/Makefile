@@ -45,7 +45,7 @@ J         ?= $(shell nproc 2>/dev/null || echo 4)
 # ---- Parameters: per-flow defaults (sim ASIZE=4 DSIZE=8; formal/MCY ASIZE=3 DSIZE=4).
 # Target-specific `?=` so a command-line ASIZE=/DSIZE= still wins.
 SIM_FLOWS    := lint synth smoke sva-neg sim sim-build regress cov bugs
-FORMAL_FLOWS := formal mcy
+FORMAL_FLOWS := formal formal-audit formal-signoff mcy
 $(SIM_FLOWS):    ASIZE ?= 4
 $(SIM_FLOWS):    DSIZE ?= 8
 $(FORMAL_FLOWS): ASIZE ?= 3
@@ -60,7 +60,7 @@ define stub
 endef
 
 .DEFAULT_GOAL := help
-.PHONY: help lint synth smoke sva-neg vplan sim sim-build regress cov formal bugs mcy results clean
+.PHONY: help lint synth smoke sva-neg vplan sim sim-build regress cov formal formal-audit formal-signoff formal-figures bugs mcy results clean
 
 # Self-documenting help: lists every rule that has a "## " description, plus variables.
 help: ## [M0] List targets and variables
@@ -71,7 +71,8 @@ help: ## [M0] List targets and variables
 	@echo "  RTL_DIR=$(RTL_DIR)"
 	@echo "  DUT_SRCS=$(DUT_SRCS)"
 	@echo "  SIM=$(SIM)  TEST=$(TEST)  SEED=$(SEED)  RATIO=$(RATIO)  J=$(J)"
-	@echo "  TASK=$(TASK) (bmc|prove|cover|pdr)  ASIZE/DSIZE: sim 4/8, formal+mcy 3/4 unless set"
+	@echo "  TASK=$(TASK) (bmc|prove|cover|pdr|audit_a0N|prove_noinv|pdr_noinv)  EXPECT=pass|fail|nopass|any  TIMEOUT=<s>"
+	@echo "  ASIZE/DSIZE: sim 4/8, formal+mcy 3/4 unless set; FORMAL_SIZES=\"$(FORMAL_SIZES)\" for formal-signoff"
 	@echo "  OUT=$(OUT)"
 	@echo "  OSS_CAD_SUITE=$(OSS_CAD_SUITE)"
 
@@ -88,8 +89,9 @@ GUARD_CASES = 1:4:ASIZE 4:0:DSIZE
 # Static checks on the RTL alone, at ASIZE:DSIZE and at the smallest formal size 2:4 (where the
 # full-flag slice [ASIZE-2:0] is one bit); then every GUARD_CASES size must be rejected; then (M6)
 # the properties: the RTL with ASYNC_FIFO_PROPS and the e2e checker (with its bound concurrent
-# twins) under Verilator -Wall, and the RTL and e2e checker read by Yosys in formal mode, so the
-# M7 flow will accept them (toolchain T15; the concurrent file is simulation only, T6).
+# twins) under Verilator -Wall, and the RTL and e2e checker read by Yosys in formal mode (the props
+# instantiate the checker under FORMAL since M7; toolchain T15; the concurrent file is simulation
+# only, T6).
 LINT_CFGS   = $(ASIZE):$(DSIZE) 2:4
 lint: ## [M1/M6] Verilator -Wall (RTL, RTL+props, e2e checker), Yosys -formal parse; ASIZE=1, DSIZE=0 rejected
 	@mkdir -p $(OUT)/lint
@@ -110,7 +112,7 @@ lint: ## [M1/M6] Verilator -Wall (RTL, RTL+props, e2e checker), Yosys -formal pa
 	  echo "+ $$cmd"; $$cmd; \
 	  cmd="verilator --lint-only -Wall --timing -Wno-SYNCASYNCNET -GASIZE=$$a -GDSIZE=$$d --top-module async_fifo_e2e_props $(E2E_SRC) $(CONC_SRC)"; \
 	  echo "+ $$cmd"; $$cmd; \
-	  y="read_verilog -sv -formal -D ASYNC_FIFO_PROPS -I $(PROPS_DIR) $(DUT_SRCS); chparam -set ASIZE $$a -set DSIZE $$d async_fifo; prep -top async_fifo"; \
+	  y="read_verilog -sv -formal -D ASYNC_FIFO_PROPS -I $(PROPS_DIR) $(E2E_SRC) $(DUT_SRCS); chparam -set ASIZE $$a -set DSIZE $$d async_fifo; prep -top async_fifo"; \
 	  echo "+ yosys -q -p '$$y'"; yosys -q -l $(OUT)/lint/yosys_props_a$${a}_d$$d.log -p "$$y" > /dev/null; \
 	  y="read_verilog -sv -formal $(E2E_SRC); chparam -set ASIZE $$a -set DSIZE $$d async_fifo_e2e_props; prep -top async_fifo_e2e_props"; \
 	  echo "+ yosys -q -p '$$y'"; yosys -q -l $(OUT)/lint/yosys_e2e_a$${a}_d$$d.log -p "$$y" > /dev/null; \
@@ -187,14 +189,14 @@ sva-neg: ## [M6] Break each assertion on purpose (force or bad stimulus); each m
 	  --repro 'make sva-neg $(REPRO_VARS)'
 
 # Verification-plan traceability (M2): the plan's structure must pass; the self-test proves the
-# checker still fails on broken plans; --trace --strict requires every planned name in the code,
-# except labels whose Runs is formal (deferred to M7: drop --defer formal there).
+# checker still fails on broken plans; --trace --strict requires every planned name in the code
+# (formal labels included since M7).
 VPLAN      = $(IP_ROOT)/docs/vplan.md
 VPLAN_CHK  = python3 $(COMMON)/scripts/vplan_check.py --vplan $(VPLAN)
 vplan: ## [M2] Check docs/vplan.md structure, self-test the checker, report code traceability
 	$(VPLAN_CHK) --structure
 	VPLAN=$(VPLAN) python3 -m unittest discover -s $(COMMON)/scripts/tests -q
-	$(VPLAN_CHK) --trace --strict --defer formal --root $(IP_ROOT) --root $(COMMON)
+	$(VPLAN_CHK) --trace --strict --root $(IP_ROOT) --root $(COMMON)
 	@echo "vplan PASS   repro: make vplan"
 
 # ---- UVM testbench (M3): sources in compile order (interfaces and packages, then DUT, then top);
@@ -249,8 +251,11 @@ REGRESS   = python3 $(COMMON)/scripts/regress.py --tests $(IP_ROOT)/regress/test
             --out $(OUT) --vars "$(REPRO_VARS)"
 REGRESS_REPRO = make regress SIM=$(SIM) $(REPRO_VARS)$(if $(N), N=$(N))$(if $(TESTS), TESTS="$(TESTS)")
 # Afterwards docs/vplan_status.md is rewritten from the merged coverage (vplan_check --annotate);
-# the target's exit status stays the regression's.
-VPLAN_STATUS = $(VPLAN_CHK) --annotate --cov $(OUT)/cov/functional.json --results $(OUT)/regress/results.json
+# the target's exit status stays the regression's. The formal sign-off (M7) is added when its
+# JSON exists; the test runs in the shell because make expands a whole recipe before running it,
+# so $(wildcard) would miss a file the same recipe has just written (formal-signoff).
+VPLAN_STATUS = $(VPLAN_CHK) --annotate --cov $(OUT)/cov/functional.json --results $(OUT)/regress/results.json \
+               `test -f $(OUT)/formal/signoff.json && echo --formal $(OUT)/formal/signoff.json`
 regress: ## [M5] Parallel regression from regress/tests.toml: [N=seeds] [TESTS="id ..."] [RECHECK=k]
 	@rc=0; $(REGRESS) -j $(J) $(if $(N),--seeds $(N)) $(if $(TESTS),--only $(TESTS)) \
 	  $(if $(filter-out 0,$(RECHECK)),--recheck $(RECHECK)) --repro '$(REGRESS_REPRO)' || rc=$$?; \
@@ -262,9 +267,67 @@ cov: ## [M5] Re-merge the last regression's coverage into $(OUT)/cov/ and update
 	@rc=0; $(REGRESS) --merge-only --repro 'make cov SIM=$(SIM) $(REPRO_VARS)' || rc=$$?; \
 	  if [ $$rc -ne 2 ]; then $(VPLAN_STATUS) || true; fi; exit $$rc
 
-# Formal verification of the RTL properties at a small ASIZE (sign-off SO-3).
-formal: ## [M7] SymbiYosys: TASK=<bmc|prove|cover|pdr> ASIZE=<n>
-	$(call stub,M7,sby -f -d $(OUT)/formal/$(TASK)_a$(ASIZE) $(IP_ROOT)/formal/async_fifo.sby $(TASK))
+# ---- Formal (M7, sign-off SO-3): SymbiYosys on formal/async_fifo.sby. formal_run.py writes a
+# per-size copy (out/<ip>/formal/a<ASIZE>_d<DSIZE>/) with absolute sources, so RTL_DIR/DUT_SRCS
+# reach formal (one DUT file), runs SBY and judges the log: the verdict must match EXPECT, and a
+# Yosys "implicitly declared" or "no driver" warning fails the run (toolchain T18).
+# TIMEOUT=<s> caps each run (DEC-011 D4); SBY_OPT="<tag>: <option> <value>" replaces one [options]
+# line (e.g. SBY_OPT="cover: depth 170" for ASIZE=4, whose two wraps need more steps).
+FORMAL_SBY   = $(IP_ROOT)/formal/async_fifo.sby
+FORMAL_SIZES ?= 2 3
+EXPECT       ?= pass
+FORMAL_RUN   = python3 $(COMMON)/scripts/formal_run.py --sby $(FORMAL_SBY) --out $(OUT)/formal --dsize $(DSIZE) \
+               --src async_fifo.sv=$(DUT_SRCS) --src async_fifo_props.svh=$(PROPS_SVH) \
+               --src async_fifo_e2e_props.sv=$(E2E_SRC) $(if $(TIMEOUT),--timeout $(TIMEOUT)) \
+               $(if $(SBY_OPT),--opt "$(SBY_OPT)")
+FORMAL_ONE   = $(if $(word 2,$(DUT_SRCS)),$(error formal: DUT_SRCS must name one file, got '$(DUT_SRCS)'))
+
+# One SBY task at one size.
+formal: ## [M7] SymbiYosys: TASK=<bmc|prove|cover|pdr|...> ASIZE=<n> [EXPECT=pass|fail|nopass|any] [TIMEOUT=s]
+	$(FORMAL_ONE)$(FORMAL_RUN) --run $(TASK):$(ASIZE):$(EXPECT) \
+	  --repro 'make formal TASK=$(TASK) EXPECT=$(EXPECT) $(REPRO_VARS)$(if $(TIMEOUT), TIMEOUT=$(TIMEOUT))$(if $(SBY_OPT), SBY_OPT="$(SBY_OPT)")'
+
+# Assumption audit (vplan §5): each task drops one active assumption. A01 and A05 must fail (bmc,
+# spec properties only, every failing label listed); A02 is recorded (k-induction without it: a
+# pass means it is unnecessary, and the ledger says so for the owner to decide).
+formal-audit: ## [M7] Drop each assumption in turn (A01, A05 must fail; A02 recorded) at ASIZE=<n>
+	$(FORMAL_ONE)$(FORMAL_RUN) --run audit_a01:$(ASIZE):fail audit_a02:$(ASIZE):any audit_a05:$(ASIZE):fail \
+	  --summary $(OUT)/formal/audit_a$(ASIZE).md --repro 'make formal-audit $(REPRO_VARS)'
+
+# SO-3 sign-off set at every FORMAL_SIZES size: bmc, k-induction, cover, PDR; then the audit and
+# the no-invariant cross-checks (recorded). Writes out/<ip>/formal/signoff.md and .json, then
+# refreshes docs/vplan_status.md (SO-3) if a merged coverage database exists.
+formal-signoff: ## [M7] SO-3: bmc/prove/cover/pdr at FORMAL_SIZES, audit + no-invariant checks -> signoff.md
+	$(FORMAL_ONE)$(FORMAL_RUN) \
+	  --run $(foreach a,$(FORMAL_SIZES),bmc:$(a) prove:$(a) cover:$(a) pdr:$(a)) \
+	        $(foreach a,$(FORMAL_SIZES),audit_a01:$(a):fail audit_a02:$(a):any audit_a05:$(a):fail prove_noinv:$(a):any pdr_noinv:$(a):any) \
+	  --summary $(OUT)/formal/signoff.md \
+	  --repro 'make formal-signoff FORMAL_SIZES="$(FORMAL_SIZES)" $(REPRO_VARS)$(if $(TIMEOUT), TIMEOUT=$(TIMEOUT))'
+	@if [ -f $(OUT)/cov/functional.json ]; then $(VPLAN_STATUS); fi
+
+# Cover-trace figures for the README (DEC-011 D5): run cover, then draw the traces that reached
+# cov_F12_empty_after_full (fill -> full -> drain) and cov_F13_two_wraps (pointer wrap) as SVG
+# into docs/figures/ (committed). ASIZE=2 by default: the two-wrap trace is 74 steps at ASIZE=3.
+FIG_DIR       = $(IP_ROOT)/docs/figures
+FIG_SUMMARY   = $(OUT)/formal/a$(ASIZE)_d$(DSIZE)/cover/summary.json
+FIG_TRACE     = $$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["workdir"]+"/"+d["cover_traces"][sys.argv[2]])' $(FIG_SUMMARY) $(1))
+FIG_SIGS_FILL = async_fifo.wclk async_fifo.wrst_n async_fifo.winc async_fifo.wfull async_fifo.wbin \
+                async_fifo.rclk async_fifo.rrst_n async_fifo.rinc async_fifo.rempty async_fifo.rbin p_e2e.fill
+FIG_SIGS_WRAP = async_fifo.wclk async_fifo.winc async_fifo.wbin async_fifo.wptr async_fifo.rclk async_fifo.rinc \
+                async_fifo.rbin async_fifo.rptr p_e2e.fill p_e2e.rd_total
+VCD2SVG       = python3 $(COMMON)/scripts/vcd2svg.py
+formal-figures: ASIZE ?= 2
+formal-figures: DSIZE ?= 4
+formal-figures: ## [M7] Cover traces (fill-full-drain, pointer wrap) as SVG in docs/figures/ (ASIZE=2)
+	$(FORMAL_ONE)$(FORMAL_RUN) --run cover:$(ASIZE) --repro 'make formal-figures $(REPRO_VARS)'
+	@mkdir -p $(FIG_DIR)
+	$(VCD2SVG) $(call FIG_TRACE,cov_F12_empty_after_full) --step 10 --svg $(FIG_DIR)/formal_fill_full_drain_a$(ASIZE).svg \
+	  --title "Formal cover cov_F12_empty_after_full: fill -> full -> drain (ASIZE=$(ASIZE), DSIZE=$(DSIZE)); one column per formal step" \
+	  --label p_e2e.fill="fill (checker)" $(FIG_SIGS_FILL)
+	$(VCD2SVG) $(call FIG_TRACE,cov_F13_two_wraps) --step 10 --svg $(FIG_DIR)/formal_pointer_wrap_a$(ASIZE).svg \
+	  --title "Formal cover cov_F13_two_wraps: both pointers wrap twice (ASIZE=$(ASIZE), DSIZE=$(DSIZE)); one column per formal step" \
+	  --label p_e2e.fill="fill (checker)" --label p_e2e.rd_total="reads (saturating)" $(FIG_SIGS_WRAP)
+	@echo "formal-figures PASS: $(FIG_DIR)/formal_*_a$(ASIZE).svg   repro: make formal-figures $(REPRO_VARS)"
 
 # Applies each planted bug patch and records which method catches it (report Q-1).
 bugs: ## [M8] Planted-bug detection matrix -> docs/bug_matrix.md

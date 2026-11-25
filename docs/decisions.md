@@ -245,3 +245,53 @@ IDs are `DEC-NNN`; cite them from code comments and other docs.
     failure report; `sva_neg.py --twins` checks each twin fires in its twin's case.
   - The vplan intents, bins, checks and ledger rows are unchanged apart from A01's simulation
     wording.
+
+---
+
+## DEC-011 — M7 formal environment decisions
+
+- **Date:** 2026-11-24
+- **Status:** APPROVED (owner, 2026-11-24, M7 kickoff: "go with recommendations")
+- **Options and choices:**
+  1. **D1, clock model.** Unconstrained clocks (A04: `wclk` and `rclk` are free inputs sampled
+     every formal step, any interleaving, coincident edges included) or ZipCPU's `anyconst` step
+     counters (fixed rates). *Choice: unconstrained.* Strictly more general; enough for safety
+     properties.
+  2. **D2, A03 (inputs change only right after their own clock's edge).** *Choice: not adopted.*
+     Its formal form is written behind a define that is off by default; Claude returns to the
+     owner only if a proof cannot close without it.
+  3. **D3, formal wording of A02 (reset release).** The vplan says a reset rises "only together
+     with a rising edge" of its clock. In the formal step model a release in the same step as the
+     edge may let async-reset flops capture at that edge, which simulation never does. *Choice:
+     settle it with toolchain experiment T17 first; if it conflicts, the owner decides a new
+     wording on the evidence.*
+  4. **D4, ASIZE = 4 (stretch).** *Choice: attempt, capped at 30 minutes per task;* record the
+     result or the timeout.
+  5. **D5, cover-trace figures.** *Choice: a standard-library script `common/scripts/vcd2svg.py`
+     renders the VCD traces to SVG; the SVGs are committed under `ip/async_fifo/docs/figures/`.*
+- **Consequences:** no assumption is added; A03 stays optional in the ledger. Any change to A02's
+  formal wording comes back to the owner with the T17 evidence.
+
+---
+
+## DEC-012 — A02 after the M7 audit
+
+- **Date:** 2026-11-24
+- **Status:** PROPOSED (awaiting the owner)
+- **Finding:** with A02 dropped (a reset may rise in any formal step, not only with its own
+  clock's rising edge), k-induction still proves every property at ASIZE 2 and 3
+  (`make formal TASK=audit_a02 ASIZE=<n>`). The RTL logic tolerates any release timing. The
+  vplan §5 audit rule says an unnecessary assumption "is retired". Physically A02 is still
+  required: an asynchronous release near an edge is a recovery/removal violation and can go
+  metastable, which no RTL model represents (plan R11).
+- **Options:**
+  1. **Drop it from formal, keep it as a requirement (recommended).** Remove the formal
+     `assume`, so the SO-3 proof rests on A01 and A05 only. Keep the simulation `asm_A02_*` checks,
+     which hold the testbench to spec §8, and the ledger row with "Formal: n/a: not needed (M7
+     audit); physical requirement (R11)". Costs a vplan row edit (Runs/Clock of the two labels)
+     and one `make formal-signoff` rerun.
+  2. **Retire A02 completely.** Also delete the simulation checks; A02 moves to "Retired IDs".
+     Loses the testbench check of a real integration rule.
+  3. **Keep A02 as is,** with the audit result documented. No work; the proof keeps an
+     assumption it does not need.
+- **Consequences:** recorded once the owner chooses.
