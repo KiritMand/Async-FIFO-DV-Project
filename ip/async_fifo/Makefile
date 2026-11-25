@@ -48,7 +48,7 @@ define stub
 endef
 
 .DEFAULT_GOAL := help
-.PHONY: help lint synth smoke vplan sim regress cov formal bugs mcy results clean
+.PHONY: help lint synth smoke vplan sim sim-build regress cov formal bugs mcy results clean
 
 # Self-documenting help: lists every rule that has a "## " description, plus variables.
 help: ## [M0] List targets and variables
@@ -159,26 +159,54 @@ TB_DEPS     = $(shell find $(TB_DIR) $(COMMON)/uvm -name '*.sv' -o -name '*.svh'
 # One build per simulator, size and RTL source list, so M8/M9 builds of patched RTL coexist.
 BUILD_TAG   = $(SIM)_a$(ASIZE)_d$(DSIZE)_$(shell echo '$(DUT_SRCS)' | md5sum | cut -c1-8)
 PLUSARGS   ?=
+# Code coverage (line, branch, toggle) is for the design only: no UVM, testbench or common TB code.
+COV_EXCLUDE = $(UVM_HOME)/* $(TB_DIR)/* $(COMMON)/uvm/*
 
-# One UVM test at one seed: build once per configuration, run in out/.../run/<test>_<seed>/,
+# Run directory name: out/.../run/<RUN>_<SEED>. RUN defaults to the test; regression entries that
+# run one test with different plusargs give each its own name (regress/tests.toml `id`).
+RUN        ?= $(TEST)
+# Everything the simulator layer needs to build the testbench (shared by sim and sim-build).
+SIM_BUILD_ARGS = TOP=tb_top SRCS="$(TB_PRE) $(DUT_SRCS) $(TB_DIR)/top/tb_top.sv" INCDIRS="$(TB_INCDIRS)" \
+	  DEFINES="FIFO_ASIZE=$(ASIZE) FIFO_DSIZE=$(DSIZE)" DEPS="$(TB_DEPS) $(DUT_SRCS)" \
+	  BUILD_DIR=$(OUT)/build/$(BUILD_TAG) J=$(J) UVM_HOME=$(UVM_HOME) COV_EXCLUDE="$(COV_EXCLUDE)"
+
+# One UVM test at one seed: build once per configuration, run in out/.../run/<RUN>_<seed>/,
 # judge the log, print the reproduction command. Delegates to common/sim/<SIM>.mk.
+# NO_BUILD=1 (used by regress.py after its single build) runs the existing binary only.
 sim: ## [M3] One UVM test: TEST=<t> SEED=<s> SIM=<sim> [PLUSARGS='+X=1 ...']; +trace for VCD
 	@test -n "$(TEST)" || { echo "make sim: TEST=<test> is required, e.g. TEST=smoke_test" >&2; exit 2; }
 	@test "$(SEED)" -ge 1 2>/dev/null || { echo "make sim: SEED must be an integer >= 1" >&2; exit 2; }
-	@$(MAKE) --no-print-directory -f $(COMMON)/sim/$(SIM).mk run \
-	  TOP=tb_top SRCS="$(TB_PRE) $(DUT_SRCS) $(TB_DIR)/top/tb_top.sv" INCDIRS="$(TB_INCDIRS)" \
-	  DEFINES="FIFO_ASIZE=$(ASIZE) FIFO_DSIZE=$(DSIZE)" DEPS="$(TB_DEPS) $(DUT_SRCS)" \
-	  BUILD_DIR=$(OUT)/build/$(BUILD_TAG) RUN_DIR=$(OUT)/run/$(TEST)_$(SEED) \
-	  TEST=$(TEST) SEED=$(SEED) PLUSARGS="$(PLUSARGS)" J=$(J) UVM_HOME=$(UVM_HOME) \
-	  REPRO="make sim TEST=$(TEST) SEED=$(SEED) SIM=$(SIM) $(REPRO_VARS)$(if $(PLUSARGS), PLUSARGS='$(PLUSARGS)')"
+	@$(MAKE) --no-print-directory -f $(COMMON)/sim/$(SIM).mk run $(SIM_BUILD_ARGS) \
+	  RUN_DIR=$(OUT)/run/$(RUN)_$(SEED) TEST=$(TEST) SEED=$(SEED) PLUSARGS="$(PLUSARGS)" \
+	  REPRO="make sim TEST=$(TEST) SEED=$(SEED) SIM=$(SIM) $(REPRO_VARS)$(if $(PLUSARGS), PLUSARGS='$(PLUSARGS)')$(if $(filter-out $(TEST),$(RUN)), RUN=$(RUN))"
 
-# Many tests x many seeds in parallel, driven by regress/tests.toml (sign-off SO-2).
-regress: ## [M5] Parallel regression from regress/tests.toml
-	$(call stub,M5,python3 $(COMMON)/scripts/regress.py --tests $(IP_ROOT)/regress/tests.toml --sim $(SIM) -j $(J))
+# Build the UVM testbench for this configuration without running a test (regress.py's one build).
+sim-build: ## [M5] Build the UVM testbench only (SIM=, ASIZE=, DSIZE=, RTL_DIR= as for sim)
+	@$(MAKE) --no-print-directory -f $(COMMON)/sim/$(SIM).mk build $(SIM_BUILD_ARGS)
 
-# Merges per-run coverage databases into one report (sign-off SO-1).
-cov: ## [M5] Merge coverage databases and write the report
-	$(call stub,M5,python3 $(COMMON)/scripts/regress.py --merge-only --sim $(SIM) -> $(OUT)/cov/)
+# Many tests x many seeds in parallel, driven by regress/tests.toml (sign-off SO-2): one build,
+# then every run; results in $(OUT)/regress/, merged coverage in $(OUT)/cov/. N= replaces the
+# default seed count (entries with their own `seeds` keep it), TESTS="a b" picks entries by id,
+# RECHECK=k reruns k random runs and diffs their logs.
+N        ?=
+TESTS    ?=
+RECHECK  ?= 0
+REGRESS   = python3 $(COMMON)/scripts/regress.py --tests $(IP_ROOT)/regress/tests.toml --sim $(SIM) \
+            --out $(OUT) --vars "$(REPRO_VARS)"
+REGRESS_REPRO = make regress SIM=$(SIM) $(REPRO_VARS)$(if $(N), N=$(N))$(if $(TESTS), TESTS="$(TESTS)")
+# Afterwards docs/vplan_status.md is rewritten from the merged coverage (vplan_check --annotate);
+# the target's exit status stays the regression's.
+VPLAN_STATUS = $(VPLAN_CHK) --annotate --cov $(OUT)/cov/functional.json --results $(OUT)/regress/results.json
+regress: ## [M5] Parallel regression from regress/tests.toml: [N=seeds] [TESTS="id ..."] [RECHECK=k]
+	@rc=0; $(REGRESS) -j $(J) $(if $(N),--seeds $(N)) $(if $(TESTS),--only $(TESTS)) \
+	  $(if $(filter-out 0,$(RECHECK)),--recheck $(RECHECK)) --repro '$(REGRESS_REPRO)' || rc=$$?; \
+	  if [ $$rc -ne 2 ]; then $(VPLAN_STATUS) || true; fi; exit $$rc
+
+# Merges the per-run coverage databases of the last regression into one report (sign-off SO-1),
+# then rewrites docs/vplan_status.md.
+cov: ## [M5] Re-merge the last regression's coverage into $(OUT)/cov/ and update docs/vplan_status.md
+	@rc=0; $(REGRESS) --merge-only --repro 'make cov SIM=$(SIM) $(REPRO_VARS)' || rc=$$?; \
+	  if [ $$rc -ne 2 ]; then $(VPLAN_STATUS) || true; fi; exit $$rc
 
 # Formal verification of the RTL properties at a small ASIZE (sign-off SO-3).
 formal: ## [M7] SymbiYosys: TASK=<bmc|prove|cover|pdr> ASIZE=<n>

@@ -28,13 +28,14 @@ class fifo_env extends uvm_env;
     vsqr   = fifo_vsequencer::type_id::create("vsqr", this);
   endfunction
 
-  // Monitors feed the scoreboard (accepted operations) and coverage (every edge); the virtual
-  // sequencer and coverage get their handles.
+  // Monitors feed the scoreboard (accepted operations) and coverage (every edge); the scoreboard
+  // feeds coverage its completed time steps; the virtual sequencer and coverage get handles.
   function void connect_phase(uvm_phase phase);
     wr_agt.mon.ap.connect(sb.wr_imp);
     rd_agt.mon.ap.connect(sb.rd_imp);
     wr_agt.mon.ap_edge.connect(cov.wr_edge_imp);
     rd_agt.mon.ap_edge.connect(cov.rd_edge_imp);
+    sb.step_ap.connect(cov.step_imp);
     cov.cfg     = cfg;
     cov.sb      = sb;
     vsqr.wr_sqr = wr_agt.sqr;

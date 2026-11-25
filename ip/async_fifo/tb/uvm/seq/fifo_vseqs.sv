@@ -57,6 +57,12 @@ class fifo_base_vseq extends uvm_sequence;
     return (r < 1) ? 1 : (r > 100) ? 100 : int'(r);
   endfunction
 
+  // Return once both sides are out of reset (it may already be so). Measured phases start here,
+  // so a long reset gap (vplan S2) cannot use up their budget (coverage closure H03).
+  protected task wait_both_released();
+    wait (p_sequencer.wr_mon.vif.wrst_n === 1'b1 && p_sequencer.rd_mon.vif.rrst_n === 1'b1);
+  endtask
+
   // Move the true fill to `target` without blocked attempts: write up or read down at 100%,
   // flags respected. The other side is idle meanwhile.
   protected task seek_fill(int unsigned target);
@@ -217,9 +223,10 @@ class vseq_drain_to_empty extends fifo_base_vseq;
   endtask
 endclass
 
-// Thrash at full (vplan §2.2): reach DEPTH-1, then write at 100% while reading at 1/d of the
-// write side's full rate (both flag policies per cfg), so the fill bounces between DEPTH-1 and
-// DEPTH. Lasts n_ops accepted reads. Checks at least min_crossings DEPTH-1 <-> DEPTH crossings in
+// Thrash at full (vplan §2.2): reach DEPTH-1 (during the reset gap if the write side is out
+// first: F17 stimulus), wait until both sides are out of reset, then write at 100% while reading
+// at 1/d of the write side's full rate (both flag policies per cfg), so the fill bounces between
+// DEPTH-1 and DEPTH. Lasts n_ops accepted reads. Checks at least min_crossings DEPTH-1 <-> DEPTH crossings in
 // the thrash window: fewer means the pacing failed at this ratio, or a flag is stuck.
 // Why d >= 2K+1 (owner decision, M4; DEC-009): at an aligned 4:1 ratio the refill lands exactly
 // one slow edge after each read, so a crossing needs a gap of 2+ slow edges, and the expected
@@ -243,6 +250,7 @@ class vseq_thrash_full extends fifo_base_vseq;
     rd_burst_seq r   = rd_burst_seq::type_id::create("thrash_rd");
     if (d == 0 && !$value$plusargs("THRASH_D=%d", d)) d = $urandom_range(2 * K + 4, 2 * K + 1);
     seek_fill(DEPTH - 1);
+    wait_both_released();
     w.n      = 0;
     w.rate   = 100;
     w.policy = FLAG_CFG;
@@ -272,8 +280,10 @@ class vseq_thrash_full extends fifo_base_vseq;
   endfunction
 endclass
 
-// Thrash at empty: the mirror image around 0 and 1. Reach fill 1, then read at 100% while
-// writing at 1/d of the read side's full rate; lasts n_ops accepted writes. Same pacing rule
+// Thrash at empty: the mirror image around 0 and 1. Reach fill 1, wait until both sides are out
+// of reset, then read at 100% while writing at 1/d of the read side's full rate; lasts n_ops
+// accepted writes. Without the wait, paced writes during a long reset gap filled the FIFO while
+// the reader was still in reset and starved the thrash (closure H03). Same pacing rule
 // (the worst case is an aligned 1:4 ratio).
 class vseq_thrash_empty extends vseq_thrash_full;
   `uvm_object_utils(vseq_thrash_empty)
@@ -290,6 +300,7 @@ class vseq_thrash_empty extends vseq_thrash_full;
     rd_burst_seq r   = rd_burst_seq::type_id::create("thrash_rd");
     if (d == 0 && !$value$plusargs("THRASH_D=%d", d)) d = $urandom_range(2 * K + 4, 2 * K + 1);
     seek_fill(1);
+    wait_both_released();
     r.n      = 0;
     r.rate   = 100;
     r.policy = FLAG_CFG;

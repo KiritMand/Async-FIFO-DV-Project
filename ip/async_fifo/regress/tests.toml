@@ -1,6 +1,19 @@
-# regress/tests.toml — the regression list (plan M4 step 3), read by common/scripts/regress.py
-# in M5. One [[test]] table per UVM test in vplan §2.2. Seeds run 1..seeds, so every run is
-# `make sim TEST=<name> SEED=<n> PLUSARGS='<plusargs>'`.
+# regress/tests.toml — the regression list (plan M4 step 3), read by common/scripts/regress.py.
+# One [[test]] table per UVM test in vplan §2.2, plus directed entries added during coverage
+# closure (docs/coverage_closure.md). Seeds run 1..seeds, so every run is
+# `make sim TEST=<name> SEED=<n> RUN=<id> PLUSARGS='<plusargs>'`.
+# Keys per [[test]]: name (UVM test), id (unique; default = name; names the run directory),
+# seeds, timeout_s, plusargs. Missing keys come from [defaults].
+
+# How regress.py builds and runs this block: the only block-specific part of the regression.
+# Commands run in `dir` (relative to this file). Placeholders: {sim} {test} {id} {seed}
+# {plusargs} {vars} (make variables such as ASIZE=, RTL_DIR=, OUT= from `make regress`) and
+# {out} (the block's output directory). run_dir is where a run leaves sim.log and coverage.dat.
+[flow]
+dir     = ".."
+build   = "make --no-print-directory sim-build SIM={sim} {vars}"
+run     = "make --no-print-directory sim TEST={test} SEED={seed} RUN={id} SIM={sim} PLUSARGS='{plusargs}' NO_BUILD=1 {vars}"
+run_dir = "{out}/run/{id}_{seed}"
 
 # Defaults for every test. seeds = N from vplan §7 (owner decision, 2026-11-22). timeout_s is
 # the wall-clock limit per run: the slowest of 1,400 M4 runs took 0.84 s on this host, so 60 s
@@ -37,3 +50,72 @@ name = "random_rates_test"
 # A random series of the M4 virtual sequences in short form.
 [[test]]
 name = "random_mix_test"
+
+# ---- Directed closure entries (docs/coverage_closure.md H02). Boundary concurrency (F16,
+# cg_concurrent) needs exactly coincident edges: an integer ratio with rphase = 0, only 25% of
+# random thrash runs (~5% per bucket). These pin each bucket's integer ratio with aligned phase.
+# Measured per run: the natural direction gives 20+ concurrent steps, the other 0-4 (weakest:
+# at_one in B4, ~0.5 per run), so 20 seeds per entry make every x_concurrent_bucket bin certain
+# rather than lucky. `make regress N=<n>` changes only the default seed count, not these.
+
+# thrash_full at each bucket's integer ratio, edges aligned: at_depth_m1 x bucket.
+[[test]]
+name = "thrash_full_test"
+id = "thrash_full_aligned_b0"
+seeds = 20
+plusargs = "+BUCKET=0 +KIND=int +RPHASE_PS=0"
+
+[[test]]
+name = "thrash_full_test"
+id = "thrash_full_aligned_b1"
+seeds = 20
+plusargs = "+BUCKET=1 +KIND=int +RPHASE_PS=0"
+
+[[test]]
+name = "thrash_full_test"
+id = "thrash_full_aligned_b2"
+seeds = 20
+plusargs = "+BUCKET=2 +KIND=int +RPHASE_PS=0"
+
+[[test]]
+name = "thrash_full_test"
+id = "thrash_full_aligned_b3"
+seeds = 20
+plusargs = "+BUCKET=3 +KIND=int +RPHASE_PS=0"
+
+[[test]]
+name = "thrash_full_test"
+id = "thrash_full_aligned_b4"
+seeds = 20
+plusargs = "+BUCKET=4 +KIND=int +RPHASE_PS=0"
+
+# thrash_empty at each bucket's integer ratio, edges aligned: at_one x bucket.
+[[test]]
+name = "thrash_empty_test"
+id = "thrash_empty_aligned_b0"
+seeds = 20
+plusargs = "+BUCKET=0 +KIND=int +RPHASE_PS=0"
+
+[[test]]
+name = "thrash_empty_test"
+id = "thrash_empty_aligned_b1"
+seeds = 20
+plusargs = "+BUCKET=1 +KIND=int +RPHASE_PS=0"
+
+[[test]]
+name = "thrash_empty_test"
+id = "thrash_empty_aligned_b2"
+seeds = 20
+plusargs = "+BUCKET=2 +KIND=int +RPHASE_PS=0"
+
+[[test]]
+name = "thrash_empty_test"
+id = "thrash_empty_aligned_b3"
+seeds = 20
+plusargs = "+BUCKET=3 +KIND=int +RPHASE_PS=0"
+
+[[test]]
+name = "thrash_empty_test"
+id = "thrash_empty_aligned_b4"
+seeds = 20
+plusargs = "+BUCKET=4 +KIND=int +RPHASE_PS=0"

@@ -1,6 +1,6 @@
 # async_fifo — Verification plan
 
-**Version** 0.2 · **Date** 2026-11-24 · **Status** DRAFT: owner decisions applied (feature-table
+**Version** 0.3 · **Date** 2026-11-24 · **Status** DRAFT: owner decisions applied (feature-table
 edits, power-up-only resets, N = 200); full text awaiting owner review ·
 **Spec** [`spec.md`](spec.md) v1.1 · **RTL** `rtl/async_fifo.sv`, tag `rtl-v1`
 
@@ -72,7 +72,7 @@ Retired IDs: none.
 | F13 | **Wrap-around.** Correct across at least two wraps of each (ASIZE+1)-bit pointer (≥ 4·DEPTH accepted reads), with full and empty each reached in both pointer laps. Behavior must not depend on the wrap count (spec §10). | Every test except `smoke_test` makes ≥ 4·DEPTH accepted reads (S5) | `fifo_scoreboard`<br>`ast_F10_wptr_is_gray_of_wbin`<br>`ast_F10_rptr_is_gray_of_rbin`<br>`ast_F06_wfull_not_optimistic`<br>`ast_F07_rempty_not_optimistic` | `cg_fill.cp_lap`<br>`cov_F13_two_wraps` | `cov_F13_two_wraps`; the unbounded proofs hold for any wrap count | B01, B10 |
 | F14 | **Show-ahead stability.** While `rempty = 0` and no read is accepted, `rdata` holds its value. Write-side activity never disturbs it (spec R3). | `random_rates_test` (0% read phases while writing)<br>`fill_to_full_test` | `ast_F14_rdata_stable`<br>`fifo_scoreboard` (value popped) | `cov_F14_hold_while_writing` | `ast_F14_rdata_stable`<br>`ast_F14_rdata_stable_gclk` (every formal step, so a transient overwrite between `rclk` edges is caught too)<br>`cov_F14_hold_while_writing` | B03 (overwrite at full) |
 | F15 | **Clock robustness.** F02–F10 hold for wclk:rclk from 1:4 to 4:1 at any phase (simulation), and for any interleaving of the two clocks, coincident edges included (formal, A04). | Every test: `fifo_env_cfg` picks the ratio bucket first (S1) | `fifo_scoreboard` and the F02–F10 assertions, active at every ratio; no checker is disabled or relaxed by ratio | `cg_cfg.x_bucket_kind`<br>`cg_cfg.x_b2_phase`<br>Every × bucket cross in `cg_fill`, `cg_concurrent`, `cg_flags`, `cg_attempts` | Every formal property runs under A04<br>`cov_F15_same_step_edges`<br>`cov_F15_wclk_burst`<br>`cov_F15_rclk_burst` | Plan R9: the ratio is fixed within a run, so the × bucket crosses close only in merged coverage. |
-| F16 | **Boundary concurrency.** An accepted write and an accepted read at the same instant are handled correctly at the boundaries. This is possible only at fill 1 and fill DEPTH−1 (fill at the start of that instant). At fill 0 the read, and at DEPTH the write, would be an underflow or overflow, which F05–F07 forbid. | `thrash_full_test`<br>`thrash_empty_test` at integer ratios with aligned phase (S1) | `fifo_scoreboard` same-timestamp rule (overflow and underflow judged on the fill at the start of the time step)<br>`ast_F06_wfull_not_optimistic`<br>`ast_F07_rempty_not_optimistic` | `cg_concurrent.x_concurrent_bucket` | `cov_F16_rw_at_one`<br>`cov_F16_rw_at_depth_m1`; the safety proofs include coincident edges (A04) | B05. "Same instant" means the same simulation timestamp, or the same formal step. |
+| F16 | **Boundary concurrency.** An accepted write and an accepted read at the same instant are handled correctly at the boundaries. This is possible only at fill 1 and fill DEPTH−1 (fill at the start of that instant). At fill 0 the read, and at DEPTH the write, would be an underflow or overflow, which F05–F07 forbid. | `thrash_full_test`<br>`thrash_empty_test` at integer ratios with aligned phase (S1)<br>Directed entries in `regress/tests.toml`: both thrash tests at every bucket's integer ratio with `+RPHASE_PS=0` (M5 closure H02) | `fifo_scoreboard` same-timestamp rule (overflow and underflow judged on the fill at the start of the time step)<br>`ast_F06_wfull_not_optimistic`<br>`ast_F07_rempty_not_optimistic` | `cg_concurrent.x_concurrent_bucket` | `cov_F16_rw_at_one`<br>`cov_F16_rw_at_depth_m1`; the safety proofs include coincident edges (A04) | B05. "Same instant" means the same simulation timestamp, or the same formal step. |
 | F17 | **Reset release order.** Both resets start asserted (A01) and are released in either order, any time apart, each on its own clock (A02). Writes accepted while the read side is still in reset are read back intact after its release, and the side still in reset keeps its reset values (F01; spec §8). | Every test: `fifo_env_cfg` randomizes the release order and the gap between releases (S2) | `fifo_scoreboard`<br>`ast_F01_rside_regs_zero`<br>`ast_F01_wside_regs_zero`<br>`ast_F07_rempty_not_optimistic` | `cg_reset.x_order_writes`<br>`cov_F17_write_during_rd_reset`<br>`cov_F17_rd_released_first`<br>`cov_F17_full_before_rd_release` | All F17 covers (Runs = both); the formal model releases each reset independently (A01, A02, A05) | B12; a synchronizer on the wrong reset (F11) |
 
 ### 2.2 Tests
@@ -90,6 +90,13 @@ with `S5_SHORT` if it makes fewer than 4·DEPTH accepted reads.
 | `thrash_empty_test` | `vseq_thrash_empty` | M4 | Mirror of `thrash_full_test` around 0 and 1: from fill 1, read at 100% while writing at 1/d of the read side's full rate, for max(4·DEPTH, 64) accepted writes, ≥ 20 crossings. 50% integer ratios |
 | `random_rates_test` | `vseq_random_rates` | M4 | 4–8 phases of 2·DEPTH to 8·DEPTH slower-clock cycles; each side's rate is 0% (weight 25), 100% (25) or [10, 90]% (50); then top-up phases until S5 is met |
 | `random_mix_test` | `vseq_random_mix` | M4 | 4–8 picks among the five sequences above in short form (one round, DEPTH thrash operations without the crossing check, 1–2 rate phases), then more picks until S5 is met |
+
+`regress/tests.toml` runs each test above with N random seeds, plus directed entries added
+during coverage closure (`docs/coverage_closure.md`): the two thrash tests pinned to each
+bucket's integer ratio with coincident edges (`+BUCKET=<b> +KIND=int +RPHASE_PS=0`, 20 seeds
+each). Every test mixes its name into the seed (M5 closure H01), so tests that share a seed
+draw different configurations. Both thrash tests start their measured phase only once both
+sides are out of reset (M5 closure H03).
 
 ### 2.3 Stimulus obligations
 
@@ -162,6 +169,21 @@ cover property (§4).
   implement the same bins another way (for example, a small tracker that feeds a plain
   coverpoint). The bins themselves don't change.
 - Bucket and phase come from `fifo_env_cfg`'s `ratio_bucket()` helper (plan M3 step 4).
+- **As built (M5, `tb/uvm/env/fifo_coverage.sv`).** Toolchain T11 confirmed every construct, so
+  all bins are native covergroup bins. Notes:
+  - Each covergroup with a × bucket cross also has a helper `cp_bucket` coverpoint (5 bins). The
+    cross implies its bins, so it is not counted in the total. `vplan_status.md` lists it
+    separately.
+  - `cg_cfg.cp_kind` names its bins `int_ratio` and `arbitrary`, because `integer` is a
+    SystemVerilog keyword.
+  - `cg_fill` and `cg_concurrent` sample one record per completed time step from the
+    scoreboard (`fifo_step_item`). `cg_flags` and `cg_attempts` judge the fill with the
+    scoreboard's `fill_at_step_start()`.
+  - `cp_writes_before_rd_release` counts accepted writes strictly before the read side's
+    release edge, which is its last in-reset `rclk` edge.
+  - `cp_phase.aligned` uses the 5% window above, so it also counts runs whose edges are close
+    but never coincide. Coincident edges are shown by `cg_concurrent`, not by `cp_phase`
+    (closure H04).
 
 ---
 
@@ -323,7 +345,9 @@ probability (1 − p)^N. For 95% confidence, p ≥ 1 − 0.05^(1/N) ≈ 3/N.
 **N = 200** seeds per test. This was the owner's decision on 2026-11-22.
 - Seven tests (§2.2) make about 1,400 runs: roughly 9 minutes on 8 cores, assuming about 3 s
   per run.
-- M5 measures the real run time. Raising N later strengthens the result and needs no
+- Measured in M5: a run takes 0.2–0.3 s in the simulator and about 0.6–1.0 s through `make`.
+  The 1,600-run sign-off regression (N = 200 plus the directed entries) takes a few minutes
+  on 8 cores after a single 5-minute build. Raising N later strengthens the result and needs no
   approval; lowering it does.
 - Seeds are recorded per run, so any failure can be reproduced from the summary.
 
@@ -366,3 +390,4 @@ From spec §12, plus limits of the methods used:
 |---|---|---|---|
 | 0.1 | 2026-11-22 | Claude | First draft (M2). Owner decisions applied: F01 adds W3/R5; F09(a) adds spec C4; F11 gets formal and `make synth` checks; F16 restricted to fill 1 and DEPTH−1; F17 added (reset release order); power-up-only resets (A05, DEC-007); N = 200. |
 | 0.2 | 2026-11-24 | Claude | M4: §2.2 test rows carry the approved stimulus parameters and their stimulus self-checks (DEC-009: 50% integer ratios in the thrash tests, thrash divisor d ∈ [7, 10] after measurement, thrash length max(4·DEPTH, 64), `S5_SHORT`). No feature, coverage or property change. |
+| 0.3 | 2026-11-24 | Claude | M5: F16 stimulus adds the directed aligned thrash entries (closure H02). §2.2 describes the directed entries, per-test seeding (H01) and the thrash reset wait (H03). §3 records how the coverage model was built (helper `cp_bucket`, `int_ratio` bin name, sampling hooks, the limit of `cp_phase`). §7 has the measured run time. No bin, check or property changed. |

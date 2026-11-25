@@ -1,11 +1,13 @@
 # test_vplan_check.py — self-test for vplan_check.py: a checker that can't fail proves nothing.
 # Each case breaks one rule in a copy of the real vplan (env VPLAN, default: the async_fifo
-# plan) and expects --structure to fail with the matching message. Run:
+# plan) and expects --structure to fail with the matching message; the --annotate cases feed
+# synthetic merged coverage and expect --strict to fail on holes and mismatches. Run:
 #   VPLAN=ip/async_fifo/docs/vplan.md python3 -m unittest discover -s common/scripts/tests
 # The mutations anchor on rows and labels of the async_fifo plan; a new block adapts them.
 
 import contextlib
 import io
+import json
 import os
 import re
 import sys
@@ -177,6 +179,81 @@ class StructureSelfTest(unittest.TestCase):
     def test_missing_section(self):
         self.assertFails(replace(self.base, "## 9. Out of scope", "## 9. Elsewhere"),
                          "missing section '## <n>. Out of scope'")
+
+
+# Runs --annotate --strict on synthetic merged coverage built from the real plan's items: a
+# complete database passes; a hole, a missing item or a bin count that differs from the plan's
+# stated total fails; helper items the plan doesn't list are reported but don't fail.
+class AnnotateSelfTest(unittest.TestCase):
+    # The plan's coverage items, in plan order, and its stated bin total.
+    @classmethod
+    def setUpClass(cls):
+        vp = vplan_check.Vplan(VPLAN)
+        cls.items = list(vplan_check.check_structure(vp).cov_items)
+        cls.total = vplan_check.stated_bins(vp)
+
+    # A functional.json in regress.py's format: every planned item, bins summing to the plan's
+    # total (the first item takes the remainder), every bin hit once.
+    def database(self) -> dict:
+        groups: dict = {}
+        for k, item in enumerate(self.items):
+            g, i = item.split(".")
+            n = self.total - (len(self.items) - 1) if k == 0 else 1
+            groups.setdefault(g, {"items": {}})["items"][i] = {"bins": {f"b{j}": 1 for j in range(n)}, "ignored": {}}
+        return {"sim": "verilator", "merged_runs": 3, "groups": groups}
+
+    # Write the database, run the checker on the real plan, return (exit code, output, page).
+    def run_annotate(self, db: dict) -> tuple[int, str, str]:
+        with tempfile.TemporaryDirectory() as d:
+            cov, status = Path(d) / "functional.json", Path(d) / "status.md"
+            cov.write_text(json.dumps(db))
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = vplan_check.main(["--annotate", "--strict", "--vplan", str(VPLAN), "--cov", str(cov),
+                                       "--status-out", str(status)])
+            return rc, buf.getvalue(), status.read_text()
+
+    # Every planned bin hit: strict passes and the page says so.
+    def test_complete_database_passes(self):
+        rc, out, page = self.run_annotate(self.database())
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"{self.total}/{self.total} planned bins hit (100%)", page)
+
+    # One unhit bin fails and is named on the page.
+    def test_hole_fails(self):
+        db = self.database()
+        g, i = self.items[1].split(".")
+        db["groups"][g]["items"][i]["bins"]["b0"] = 0
+        rc, _, page = self.run_annotate(db)
+        self.assertEqual(rc, 1)
+        self.assertRegex(page, rf"`{re.escape(self.items[1])}` \| 0/1 .*\*\*HOLES\*\* \| `b0`")
+
+    # A planned item missing from the database fails (planned but not implemented).
+    def test_missing_item_fails(self):
+        db = self.database()
+        g, i = self.items[-1].split(".")
+        del db["groups"][g]["items"][i]
+        rc, _, page = self.run_annotate(db)
+        self.assertEqual(rc, 1)
+        self.assertIn("NOT IN DATABASE", page)
+
+    # One bin more than the plan states fails: plan and code must agree on the model's size.
+    def test_bin_count_mismatch_fails(self):
+        db = self.database()
+        g, i = self.items[0].split(".")
+        db["groups"][g]["items"][i]["bins"]["extra"] = 1
+        rc, _, page = self.run_annotate(db)
+        self.assertEqual(rc, 1)
+        self.assertIn(f"differs from the plan's {self.total}", page)
+
+    # A helper item the plan doesn't list is reported, not counted, and doesn't fail.
+    def test_helper_item_reported(self):
+        db = self.database()
+        g = self.items[0].split(".")[0]
+        db["groups"][g]["items"]["cp_helper"] = {"bins": {"x": 0}, "ignored": {}}
+        rc, out, page = self.run_annotate(db)
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"`{g}.cp_helper`", page)
 
 
 if __name__ == "__main__":

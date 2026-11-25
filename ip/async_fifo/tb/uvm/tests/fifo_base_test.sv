@@ -21,17 +21,29 @@ class fifo_base_test extends uvm_test;
   endfunction
 
   // Clock/reset handles, then the configuration (fatal if no valid one), then the environment.
+  // The reseed comes first so the cfg object, created next, follows it (toolchain T13).
   function void build_phase(uvm_phase phase);
     super.build_phase(phase);
     if (!uvm_config_db#(virtual clk_rst_if)::get(this, "", "wclk_vif", wclk_vif) ||
         !uvm_config_db#(virtual clk_rst_if)::get(this, "", "rclk_vif", rclk_vif))
       `uvm_fatal("NOVIF", "fifo_base_test: wclk_vif/rclk_vif missing in config_db")
+    reseed_per_test();
     cfg = fifo_env_cfg::type_id::create("cfg");
     pre_cfg();
     if (!cfg.randomize_all()) `uvm_fatal("CFG", "no valid configuration (see the CFG error above)")
     adjust_cfg();
     uvm_config_db#(fifo_env_cfg)::set(this, "*", "cfg", cfg);
     env = fifo_env::type_id::create("env", this);
+  endfunction
+
+  // Mix the test's name into this process's random state. Without it, every test drew the same
+  // configuration for the same seed (coverage closure H01): 1,400 sign-off runs held only ~400
+  // distinct configurations. The run stays a pure function of (test, seed), so reruns reproduce.
+  protected function void reseed_per_test();
+    int unsigned h = 0;
+    string name = get_type_name();
+    foreach (name[i]) h = h * 31 + int'(name[i]);
+    process::self().srandom($urandom ^ h);
   endfunction
 
   // Hook: a test may set cfg fields that steer randomization (e.g. int_pct) before it runs.

@@ -3,7 +3,23 @@
 // compare. Same-timestamp rule: overflow and underflow are judged on the fill at the *start* of
 // the time step, so the order in which the two monitors deliver same-instant events can't hide
 // an overflow or underflow (spec §5 coincident-edge rule). It also counts boundary crossings and
-// keeps a window of fill statistics that the M4 thrash sequences check.
+// keeps a window of fill statistics that the M4 thrash sequences check. Each completed time step
+// is published on step_ap for fifo_coverage (cg_fill, cg_concurrent: sampled from the model).
+
+// One completed simulation time step of the reference model (published by the scoreboard).
+class fifo_step_item extends uvm_object;
+  `uvm_object_utils(fifo_step_item)
+  time         t;           // the step's timestamp
+  int          fill_start;  // fill before any of the step's operations (spec §5 rule)
+  int          fill_end;    // fill after all of them
+  bit          wr, rd;      // the step had an accepted write / an accepted read
+  int unsigned n_writes;    // accepted writes so far, this step included (pointer lap, F13)
+
+  // Constructor (UVM factory signature).
+  function new(string name = "fifo_step_item");
+    super.new(name);
+  endfunction
+endclass
 
 // Analysis imps for the two monitors (macros must sit at package scope).
 `uvm_analysis_imp_decl(_wr)
@@ -14,6 +30,7 @@ class fifo_scoreboard extends uvm_scoreboard;
 
   uvm_analysis_imp_wr #(wr_item, fifo_scoreboard) wr_imp;  // accepted writes
   uvm_analysis_imp_rd #(rd_item, fifo_scoreboard) rd_imp;  // accepted reads
+  uvm_analysis_port #(fifo_step_item) step_ap;             // completed time steps (coverage)
 
   // Model state: expected contents; the time step being processed and its starting fill.
   protected data_t model[$];
@@ -55,6 +72,7 @@ class fifo_scoreboard extends uvm_scoreboard;
     super.build_phase(phase);
     wr_imp = new("wr_imp", this);
     rd_imp = new("rd_imp", this);
+    step_ap = new("step_ap", this);
     if (!$value$plusargs("SB_INJECT_ERROR=%d", inject_at) && $test$plusargs("SB_INJECT_ERROR"))
       inject_at = 1;
     if (inject_at != 0)
@@ -65,6 +83,13 @@ class fifo_scoreboard extends uvm_scoreboard;
   // between time steps it is exact. Sequences read it after the NBA region (rd_to_fill_seq).
   function int fill();
     return model.size();
+  endfunction
+
+  // Fill at the start of the time step at time t (spec §5): what flag and attempt coverage judge
+  // against. Correct whichever monitor reports first: if no event of step t has been applied
+  // yet, the current fill is the starting fill.
+  function int fill_at_step_start(time t);
+    return (in_step && t == t_step) ? fill_at_start : model.size();
   endfunction
 
   // Called before each event. When simulation time has moved on, the previous step is complete:
@@ -81,10 +106,11 @@ class fifo_scoreboard extends uvm_scoreboard;
   endfunction
 
   // Fold one completed time step: max/min and crossings, for the run and the window, and
-  // concurrency. Uses the fill at the step's end, never a transient inside it (DEPTH >= 4, so
-  // the two crossing pairs are disjoint).
+  // concurrency; then publish the step for coverage. Uses the fill at the step's end, never a
+  // transient inside it (DEPTH >= 4, so the two crossing pairs are disjoint).
   protected function void track_fill();
     int f = model.size();
+    fifo_step_item st = fifo_step_item::type_id::create("step");
     bit full_x  = (f == DEPTH && last_fill == DEPTH - 1) || (f == DEPTH - 1 && last_fill == DEPTH);
     bit empty_x = (f == 1 && last_fill == 0) || (f == 0 && last_fill == 1);
     if (f > max_fill) max_fill = f;
@@ -99,6 +125,9 @@ class fifo_scoreboard extends uvm_scoreboard;
       else                                 n_conc_other++;
     end
     last_fill = f;
+    st.t = t_step; st.fill_start = fill_at_start; st.fill_end = f;
+    st.wr = step_wr; st.rd = step_rd; st.n_writes = n_writes;
+    step_ap.write(st);
   endfunction
 
   // Start a new window at the current fill. Called by a virtual sequence between operations, so

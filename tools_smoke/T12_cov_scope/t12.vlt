@@ -1,0 +1,4 @@
+`verilator_config
+// Code coverage for the design only: switch it off for the testbench file. (A global
+// `coverage_off` followed by `coverage_on -file` records nothing at all: see run.sh.)
+coverage_off -file "*/t12_tb.sv"

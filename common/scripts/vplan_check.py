@@ -9,7 +9,11 @@ Modes:
                once and referenced from its home row; the ledger and sign-off are filled in.
   --trace      look for every planned label, covergroup, test and target in the code and
                report what exists. Report-only unless --strict (strict from M6 on).
-  --annotate   write docs/vplan_status.md with coverage and proof status (M5, not built yet).
+  --annotate   write docs/vplan_status.md: the merged coverage of the last regression
+               (functional.json from regress.py) per vplan coverage item and per feature, the
+               regression result, and what is still pending (cover properties M6, formal M7).
+               With --strict it fails on any hole, any planned item missing from the coverage
+               database, or a bin count that differs from the plan's stated total.
 
 Python >= 3.11, standard library only. Exit status: 0 pass, 1 check failed, 2 usage error.
 """
@@ -17,6 +21,8 @@ Python >= 3.11, standard library only. Exit status: 0 pass, 1 check failed, 2 us
 from __future__ import annotations
 
 import argparse
+import datetime
+import json
 import re
 import shlex
 import sys
@@ -572,6 +578,143 @@ def run_trace(mdl: Model, roots: list[Path], makefile: Path, verbose: bool) -> i
 
 
 # ---------------------------------------------------------------------------------------------
+# --annotate
+# ---------------------------------------------------------------------------------------------
+
+# Coverage numbers for one vplan item from functional.json: (live bins, hit, hole names), or
+# None when the item is not in the database (planned but not implemented).
+def item_status(groups: dict, item: str) -> tuple[int, int, list[str]] | None:
+    group, point = item.split(".")
+    it = groups.get(group, {}).get("items", {}).get(point)
+    if it is None:
+        return None
+    bins = it["bins"]
+    return len(bins), sum(1 for c in bins.values() if c > 0), sorted(b for b, c in bins.items() if c == 0)
+
+
+# The plan's stated bin total ("**Totals.** ... <n> bins"), or None if it states none.
+def stated_bins(vp: Vplan) -> int | None:
+    for ln in vp.lines:
+        m = re.search(r"\*\*Totals\.\*\*.*?(\d+)\s+bins", ln)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+# Percentage text that never rounds a hole up to 100.
+def pct(hit: int, total: int) -> str:
+    if total == 0:
+        return "n/a"
+    return "100%" if hit == total else f"{min(99.9, 100.0 * hit / total):.1f}%"
+
+
+# Write the status page from the plan, the merged coverage and (optionally) the regression
+# results. Returns the number of problems --strict fails on: holes, missing items, a bin count
+# different from the plan's total.
+def run_annotate(vp: Vplan, mdl: Model, cov_path: Path, results_path: Path | None, out: Path) -> int:
+    cov = json.loads(cov_path.read_text())
+    groups = cov["groups"]
+    covers = cov.get("covers")  # cover-property hits {label: count}, once M6 adds them
+    excluded = {t for r in vp.tables["exclusions"] for t in tokens(r["Item"])}
+    problems = 0
+    # Coverage model: one row per planned item, in plan order.
+    rows, live_total, hit_total, missing = [], 0, 0, []
+    for item in mdl.cov_items:
+        st = item_status(groups, item)
+        if item in excluded:
+            rows.append(f"| `{item}` | — | — | excluded (vplan §8) | |")
+        elif st is None:
+            missing.append(item)
+            rows.append(f"| `{item}` | — | — | **NOT IN DATABASE** | |")
+        else:
+            n, h, holes = st
+            live_total += n
+            hit_total += h
+            rows.append(f"| `{item}` | {h}/{n} | {pct(h, n)} | {'covered' if h == n else '**HOLES**'} | "
+                        f"{', '.join(f'`{b}`' for b in holes)} |")
+    holes_total = live_total - hit_total
+    planned = stated_bins(vp)
+    count_ok = planned is None or planned == live_total + sum(
+        (item_status(groups, i) or (0, 0, []))[0] for i in excluded if i in mdl.cov_items)
+    problems += holes_total + len(missing) + (not count_ok)
+    # Items in the database that the plan doesn't list (helper coverpoints for crosses).
+    extra = sorted(f"{g}.{i}" for g, gd in groups.items() for i in gd["items"] if f"{g}.{i}" not in mdl.cov_items)
+    # Per feature: its coverage items, its simulation cover properties, its formal column.
+    feats = []
+    for fid, r in mdl.features.items():
+        cov_items = [t for t in tokens(r["Coverage"]) if t in mdl.cov_items]
+        sim_covers = [t for t in tokens(r["Coverage"]) if t.startswith("cov_") and t in mdl.props
+                      and mdl.props[t]["Runs"] in ("sim", "both")]
+        if is_na(r["Coverage"]):
+            cstat = "n/a"
+        else:
+            sts = [item_status(groups, i) for i in cov_items if i not in excluded]
+            n = sum(s[0] for s in sts if s)
+            h = sum(s[1] for s in sts if s)
+            cstat = (f"{h}/{n} bins" + ("" if h == n and all(sts) else " — **HOLES**")) if cov_items else "—"
+        if covers is None:
+            pstat = f"{len(sim_covers)} pending (M6)" if sim_covers else "—"
+        else:
+            hit_c = sum(1 for c in sim_covers if covers.get(c, 0) > 0)
+            pstat = f"{hit_c}/{len(sim_covers)} hit" + ("" if hit_c == len(sim_covers) else " — **MISSED**")
+            problems += len(sim_covers) - hit_c
+        formal = "n/a" if is_na(r["Formal"]) else "pending (M7)"
+        feats.append(f"| {fid} | {cstat} | {pstat} | {formal} |")
+    # Regression result, if given.
+    reg = "No regression results given."
+    if results_path and results_path.is_file():
+        data = json.loads(results_path.read_text())
+        runs, meta = data["runs"], data["meta"]
+        n_pass = sum(r["status"] == "PASS" for r in runs)
+        per = {}
+        for r in runs:
+            per.setdefault(r["id"], []).append(r["status"] == "PASS")
+        reg = (f"{n_pass}/{len(runs)} runs passed ({len(per)} entries, "
+               + ", ".join(f"`{k}` {sum(v)}/{len(v)}" for k, v in per.items())
+               + f"); git {meta['git']}; {meta['generated']}; reproduce with `{meta['repro']}`.")
+    # The page.
+    so1 = (f"{hit_total}/{live_total} planned bins hit ({pct(hit_total, live_total)})"
+           + (f", {len(missing)} item(s) missing" if missing else "")
+           + ("" if count_ok else f", **bin count {live_total} differs from the plan's {planned}**"))
+    lines = [
+        f"# {vp.path.parent.parent.name} — verification plan status",
+        "",
+        f"Generated by `vplan_check.py --annotate` on {datetime.datetime.now().isoformat(timespec='seconds')} "
+        f"from `{vp.path.name}` and the merged coverage of {cov['merged_runs']} passing runs "
+        f"({cov['sim']}). Do not edit by hand: rerun `make cov` (or `make regress`).",
+        "",
+        "## Sign-off",
+        "",
+        "| ID | Status |",
+        "|---|---|",
+        f"| SO-1 coverage model | {so1} |",
+        f"| SO-1 cover properties | {'pending (M6)' if covers is None else 'see features'} |",
+        f"| SO-2 regression | {reg} |",
+        "| SO-3 formal | pending (M7) |",
+        "",
+        "## Coverage model (vplan §3)",
+        "",
+        "| Item | Hit/bins | Coverage | Status | Holes |",
+        "|---|---|---|---|---|",
+        *rows,
+        "",
+        f"Planned total: {planned if planned is not None else 'not stated'} bins; in the database: "
+        f"{live_total} live bins in the planned items. Items in the database but not in the plan "
+        f"(helpers, not counted): {', '.join(f'`{e}`' for e in extra) or 'none'}.",
+        "",
+        "## Features",
+        "",
+        "| ID | Coverage | Simulation covers | Formal |",
+        "|---|---|---|---|",
+        *feats,
+        "",
+    ]
+    out.write_text("\n".join(lines))
+    print(f"vplan_check --annotate: SO-1 coverage model {so1}; wrote {out}")
+    return problems
+
+
+# ---------------------------------------------------------------------------------------------
 # Command line
 # ---------------------------------------------------------------------------------------------
 
@@ -581,13 +724,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--vplan", required=True, type=Path, help="path to docs/vplan.md")
     ap.add_argument("--structure", action="store_true", help="check the plan itself")
     ap.add_argument("--trace", action="store_true", help="look for planned names in the code")
-    ap.add_argument("--annotate", action="store_true", help="write vplan_status.md (M5)")
+    ap.add_argument("--annotate", action="store_true", help="write vplan_status.md from merged coverage")
+    ap.add_argument("--cov", type=Path, help="--annotate: functional.json written by regress.py")
+    ap.add_argument("--results", type=Path, help="--annotate: results.json written by regress.py")
+    ap.add_argument("--status-out", type=Path, help="--annotate: output (default: vplan_status.md next to the vplan)")
     ap.add_argument("--root", type=Path, action="append", default=[],
                     help="directory to search for code (repeatable; default: the block root, "
                          "two levels above the vplan)")
     ap.add_argument("--makefile", type=Path, help="Makefile for `make <target>` references "
                                                   "(default: <first root>/Makefile)")
-    ap.add_argument("--strict", action="store_true", help="--trace fails on anything missing")
+    ap.add_argument("--strict", action="store_true", help="--trace fails on anything missing; "
+                                                       "--annotate fails on any hole")
     ap.add_argument("-v", "--verbose", action="store_true", help="list missing names")
     args = ap.parse_args(argv)
     raw = list(argv) if argv is not None else sys.argv[1:]
@@ -595,8 +742,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if not (args.structure or args.trace or args.annotate):
         ap.error("choose at least one of --structure, --trace, --annotate")
-    if args.annotate:
-        print("vplan_check --annotate: not implemented yet, built in M5 (docs/PROJECT_PLAN.md §6)",
+    if args.annotate and not (args.cov and args.cov.is_file()):
+        print(f"vplan_check --annotate: need --cov <functional.json> (got {args.cov}); run `make regress`",
               file=sys.stderr)
         return 2
     if not args.vplan.is_file():
@@ -627,6 +774,16 @@ def main(argv: list[str] | None = None) -> int:
         bad = run_trace(mdl, roots, makefile, args.verbose)
         if args.strict and bad:
             print(f"vplan_check --trace --strict: FAIL, {bad} missing or orphan item(s)   {repro}")
+            rc = 1
+    if args.annotate:
+        if vp.findings:
+            print(f"vplan_check --annotate: the plan has {len(vp.findings)} structure problem(s); "
+                  "run --structure first", file=sys.stderr)
+            return 1
+        out = args.status_out or args.vplan.parent / "vplan_status.md"
+        bad = run_annotate(vp, mdl, args.cov, args.results, out)
+        if args.strict and bad:
+            print(f"vplan_check --annotate --strict: FAIL, {bad} hole(s) or missing item(s)   {repro}")
             rc = 1
     if rc == 0:
         print(repro)
