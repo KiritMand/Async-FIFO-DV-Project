@@ -1,0 +1,20 @@
+# B11_full_early.patch — planted bug B11 (M8; vplan §6), against tag rtl-v1.
+#
+# wfull asserts at DEPTH-1: the full compare uses the pointer one past the next write pointer.
+# Safe but wrong: nothing is lost or overwritten, but one entry of the FIFO can never be used,
+# so capacity checks fail and the full-fill coverage bin is a hole. Violates F08, F12.
+#
+# Applied by common/scripts/bug_matrix.py to a copy of rtl-v1 (never to rtl/).
+# Check by hand: git apply --check ip/async_fifo/bugs/B11_full_early.patch
+--- a/ip/async_fifo/rtl/async_fifo.sv
++++ b/ip/async_fifo/rtl/async_fifo.sv
+@@ -72,7 +72,8 @@
+ 
+   // Full: the next gray write pointer equals the synchronized gray read pointer with its two
+   // MSBs inverted, i.e. the writer is exactly DEPTH entries (one lap) ahead of the reader.
+-  assign wfull_next = (wgray_next == {~wq2_rptr[ASIZE:ASIZE-1], wq2_rptr[ASIZE-2:0]});
++  assign wfull_next = ((((wbin_next + {{ASIZE{1'b0}}, 1'b1}) >> 1) ^ (wbin_next + {{ASIZE{1'b0}}, 1'b1}))
++                     == {~wq2_rptr[ASIZE:ASIZE-1], wq2_rptr[ASIZE-2:0]});
+ 
+   // Write pointer and full flag. Loading wfull from *_next makes it see this edge's own write,
+   // so the next edge can never overfill. wfull resets to 0.

@@ -1,0 +1,21 @@
+# B08_one_sync_stage.patch — planted bug B08 (M8; vplan §6), against tag rtl-v1.
+#
+# One synchronizer stage deleted on the read->write path: wfull compares against wq1_rptr.
+# wq2_rptr is still assigned (every name the properties use exists) but drives nothing, so
+# the read pointer reaches the full logic through a single flop: the first-stage flop's
+# metastability has no full clock period to resolve. Functionally the flag only gets one
+# wclk edge faster and stays conservative, so no RTL check can fail (plan R11). Violates F11.
+#
+# Applied by common/scripts/bug_matrix.py to a copy of rtl-v1 (never to rtl/).
+# Check by hand: git apply --check ip/async_fifo/bugs/B08_one_sync_stage.patch
+--- a/ip/async_fifo/rtl/async_fifo.sv
++++ b/ip/async_fifo/rtl/async_fifo.sv
+@@ -72,7 +72,7 @@
+ 
+   // Full: the next gray write pointer equals the synchronized gray read pointer with its two
+   // MSBs inverted, i.e. the writer is exactly DEPTH entries (one lap) ahead of the reader.
+-  assign wfull_next = (wgray_next == {~wq2_rptr[ASIZE:ASIZE-1], wq2_rptr[ASIZE-2:0]});
++  assign wfull_next = (wgray_next == {~wq1_rptr[ASIZE:ASIZE-1], wq1_rptr[ASIZE-2:0]});
+ 
+   // Write pointer and full flag. Loading wfull from *_next makes it see this edge's own write,
+   // so the next edge can never overfill. wfull resets to 0.

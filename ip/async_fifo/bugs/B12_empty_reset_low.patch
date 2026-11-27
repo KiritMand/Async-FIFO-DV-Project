@@ -1,0 +1,20 @@
+# B12_empty_reset_low.patch — planted bug B12 (M8; vplan §6), against tag rtl-v1.
+#
+# rempty resets to 0 instead of 1.
+# During reset the FIFO claims to hold data; a read at the first rclk edge after release is
+# accepted from an empty FIFO and leaves rbin ahead of wbin. If no read comes at that edge,
+# rempty recovers to 1 and the bug is invisible. Violates F01, F07.
+#
+# Applied by common/scripts/bug_matrix.py to a copy of rtl-v1 (never to rtl/).
+# Check by hand: git apply --check ip/async_fifo/bugs/B12_empty_reset_low.patch
+--- a/ip/async_fifo/rtl/async_fifo.sv
++++ b/ip/async_fifo/rtl/async_fifo.sv
+@@ -127,7 +127,7 @@
+     if (!rrst_n) begin
+       rbin   <= '0;
+       rptr   <= '0;
+-      rempty <= 1'b1;
++      rempty <= 1'b0;
+     end else begin
+       rbin   <= rbin_next;
+       rptr   <= rgray_next;

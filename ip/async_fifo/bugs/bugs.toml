@@ -1,0 +1,357 @@
+# bugs/bugs.toml — the planted-bug list (M8, vplan §6), read by common/scripts/bug_matrix.py.
+# Predictions were written on 2026-11-25 BEFORE any bug was run; they are never edited after a
+# run. Differences are explained in [bug.explain] (M8 step 3), one entry per differing cell, and
+# bug_matrix.py fails while a difference has no explanation.
+#
+# The cdc cell was added with the structural checker (M8 step 5), before the matrix run but after
+# its bring-up runs on B07-B10, so the cdc predictions for those four are not blind.
+#
+# Cell values. static: yes | no (make lint or make synth fails). cdc: yes | no (make cdc fails).
+# sim_sb (UVM checks only, SVA=0) and sim_sva (all assertions): yes = every run of the subset
+#   fails; stim = some do (the stimulus must create the scenario); no = none.
+# formal (bmc_bugs, spec properties, no invariants, depth 20): e2e = an e2e label fails;
+#   white-box = only white-box labels fail; no = nothing fails within the bound.
+# prove (k-induction with the invariants): pass | fail (FAIL or UNKNOWN).
+# covers_lost: formal covers reached on rtl-v1 but not on the bug (cover mode ignores
+#   assertions, toolchain T19, so this is pure reachability).
+
+# How the matrix runs every bug. Simulation: these regress/tests.toml ids, seeds 1..seeds, at the
+# simulation size (ASIZE=4, DSIZE=8). Formal: these tasks at formal_asize (DSIZE=4).
+[matrix]
+tests          = ["smoke_test", "fill_to_full_test", "drain_to_empty_test", "thrash_full_test",
+                  "thrash_empty_test", "random_rates_test", "random_mix_test"]
+seeds          = 20
+formal_asize   = 2
+formal_tasks   = ["bmc_bugs", "prove", "cover"]
+formal_timeout = 1800
+
+# Conclusions written after the run, shown on the page below the summary table (Markdown).
+[report]
+findings = """
+1. **Every bug is caught by some method; no method catches every bug.**
+
+   | Method | Bugs caught | Missed |
+   |---|---|---|
+   | Simulation, UVM checks only (scoreboard and test checks) | 8 of 12 | B07, B08, B09, B12 |
+   | Simulation with every assertion | 11 of 12 | B08 |
+   | Formal, spec properties to depth 20 | 11 of 12 (ten through an e2e property) | B08 |
+   | Structural CDC check | 2 of 12 (B08, B09) | the ten functional bugs |
+
+   In formal, B07 fails only white-box properties. Lint and synth also flag B07 and B08, but only
+   by accident: each leaves a register unread. B08 escapes every functional method, including the
+   k-induction proof.
+2. **Assertions on the flags turn luck into certainty.** Failing runs, UVM checks only → with
+   every assertion:
+   - B05: 75 → 140
+   - B12: 0 → 140
+   - B06: 114 → 140
+   - B01: 96 → 138
+   - B11: 99 → 118
+   - B09: 0 → 41
+
+   The scoreboard sees a wrong flag only when the stimulus acts on it at the wrong edge. A property
+   on the flag sees the flag itself.
+3. **For data-path bugs, assertions add timing, not detection.** B03, B04 and B10 fail in exactly
+   the same runs with and without assertions. The assertion (`ast_F14_rdata_stable`,
+   `ast_F05_blocked_read_holds_rptr`) fires earlier than the scoreboard's mismatch, which helps
+   locate the bug, but finds no new failures.
+4. **Regular tests can hide bugs.** B10 (memory addressed with gray bits) passes every directed
+   test. Filling exactly DEPTH entries from empty keeps the live window aligned at pointer 0 or
+   16, where no two live entries share a slot. B04 needs a read attempt at empty, which
+   `fill_to_full_test` and `thrash_full_test` never make. The random tests carry these detections.
+5. **CDC bugs are a separate class.** RTL simulation and RTL formal have no metastability.
+   - B07 (binary pointer crossing) is seen only by the source-side white-box
+     `ast_F09_wptr_cdc_one_bit`; no e2e property fails in simulation or in formal.
+   - B08 (one synchronizer stage) is seen by nothing functional: only the structural check (R2)
+     and a cover that becomes unreachable.
+   - B09 (synchronizer on the source clock) shows up functionally only through a latency side
+     effect: `ast_F08_rempty_exact`, in 41 of 140 runs and in formal. Its cause is found by the
+     structural rules R1/R3 and the white-box `ast_F11_rsync_on_rclk`.
+
+   See `docs/interview_notes.md` (metastability).
+6. **Covers catch "safe but wrong".** `cov_F08_wfull_lag_k_minus_1` has 1,866 hits on rtl-v1 and
+   none on B08. Five covers that need fill = DEPTH become unreachable on B11.
+7. **Formal is the fastest finder.** At ASIZE=2, every functional bug fails `bmc_bugs` within 17
+   steps (B12 at step 1), each run in minutes. `prove` fails or is inconclusive for every bug
+   except B08.
+8. **The matrix found a testbench gap (B12).** The first `rclk` edge after reset release never
+   carries a read, because the driver sees the release one edge late. The write side works the
+   same way. A fix is proposed under B12; it is the owner's decision, because it changes the
+   stimulus behind SO-1/SO-2.
+"""
+
+# ---- B01
+[[bug]]
+id      = "B01"
+patch   = "B01_full_msb_only.patch"
+title   = "Full compare inverts only the MSB"
+[bug.predict]
+static      = "no"
+cdc         = "no"
+sim_sb      = "stim"
+sim_sva     = "stim"
+formal      = "e2e"
+prove       = "fail"
+covers_lost = []
+why = """Full asserts at fill 31 - 2*rbin (mod 32): from rbin = 0 never, so the 17th write of a
+fill overflows (SB_OVERFLOW, F12_CAPACITY, SMOKE; ast_F06/ast_F12). thrash_empty keeps fill <= 1,
+where the bug only shows as an early full at rbin 15 or 31, which no UVM check flags and
+ast_F08_wfull_exact sees only if reads pause 3 wclk edges then: stim in both columns. Formal:
+ast_F12_capacity fails at the 5th write from reset."""
+
+# ---- B02
+[[bug]]
+id      = "B02"
+patch   = "B02_full_no_invert.patch"
+title   = "Full compare without inversion (empty-style)"
+[bug.predict]
+static      = "no"
+cdc         = "no"
+sim_sb      = "yes"
+sim_sva     = "yes"
+formal      = "e2e"
+prove       = "fail"
+covers_lost = []
+why = """wfull rises whenever the writer idles at (synchronized) fill 0 and then never falls, or
+the writer overflows at fill 16: every test either overflows (SB_OVERFLOW) or stalls (SMOKE,
+F12_CAPACITY, stall guards, S5_SHORT). With SVA, ast_F12_capacity / ast_F08_wfull_exact fire at
+the first idle edge. Formal: ast_F12_capacity at the first idle wclk edge after reset."""
+
+# ---- B03
+[[bug]]
+id      = "B03"
+patch   = "B03_write_ignores_full.patch"
+title   = "Memory write enable ignores wfull"
+[bug.predict]
+static      = "no"
+cdc         = "no"
+sim_sb      = "stim"
+sim_sva     = "stim"
+formal      = "e2e"
+prove       = "fail"
+covers_lost = []
+why = """Only a write attempt at true full corrupts data (at a lagging full the slot is free). M4
+measured: smoke and fill_to_full always, random_mix mostly, random_rates/thrash_full only with
+respect_full = 0, never drain_to_empty or thrash_empty. With SVA the overwritten slot is the one
+on rdata, so ast_F14_rdata_stable fires at the next rclk edge, earlier than SB_MISMATCH but in
+the same runs. Formal: ast_F14_rdata_stable_gclk / ast_F02_tracked_word."""
+
+# ---- B04
+[[bug]]
+id      = "B04"
+patch   = "B04_read_while_empty.patch"
+title   = "Read pointer advances while empty"
+[bug.predict]
+static      = "no"
+cdc         = "no"
+sim_sb      = "stim"
+sim_sva     = "stim"
+formal      = "e2e"
+prove       = "fail"
+covers_lost = []
+why = """Needs a read attempt while rempty = 1 out of reset; most runs have one (smoke ends with
+two, drain_to_empty blocks k reads per round, respect_empty = 0 runs), so the scoreboard sees
+SB_UNDERFLOW or SB_MISMATCH soon after. With SVA the white-box ast_F05_blocked_read_holds_rptr
+fires first, at the blocked read itself. Formal: ast_F05 (white-box) and ast_F07 (e2e)."""
+
+# ---- B05
+[[bug]]
+id      = "B05"
+patch   = "B05_empty_current_ptr.patch"
+title   = "rempty from the current, not the next, read pointer"
+[bug.predict]
+static      = "no"
+cdc         = "no"
+sim_sb      = "stim"
+sim_sva     = "stim"
+formal      = "e2e"
+prove       = "fail"
+covers_lost = []
+why = """rempty stays low one rclk edge after the last entry is read, so only a read at the very
+next edge underflows: back-to-back reads down to empty (smoke and drain_to_empty read at 100%;
+others when the reader is fast). SB_UNDERFLOW and ast_F07_rempty_not_optimistic fire at the same
+edge. Formal: M7 saw ast_F14_rdata_stable_gclk at step 11; ast_F07 should follow."""
+
+[bug.explain]
+sim_sva = """Predicted stim, like the scoreboard (75/140): an underflow needs a read at the one rclk edge
+where rempty is wrongly low. But ast_F07_rempty_not_optimistic checks the flag itself at every
+rclk edge: rempty = 0 with true fill 0 fails whether or not a read comes. Every run drains to
+empty after a read at least once, so every run fails (139 first caught by cast_F07, the
+concurrent twin of ast_F07 in the same time step, 1 by cast_F14). Lesson: checking the flag
+directly catches what checking its consequence (the scoreboard) only catches by luck."""
+
+# ---- B06
+[[bug]]
+id      = "B06"
+patch   = "B06_bad_gray.patch"
+title   = "Gray conversion bin ^ (bin << 1)"
+[bug.predict]
+static      = "no"
+cdc         = "no"
+sim_sb      = "stim"
+sim_sva     = "yes"
+formal      = "e2e"
+prove       = "fail"
+covers_lost = []
+why = """The code is a bijection, so empty works; full matches when wbin ^ rbin = 8 (ASIZE=4):
+early full at fill 8, or overflow at 16. Fill-to-full tests fail (F12_CAPACITY, SMOKE), but
+thrash_empty never gets near 8. With SVA the white-box ast_F10_wptr_is_gray_of_wbin and
+ast_F09_wptr_cdc_one_bit fire at the first write of every run. Formal (ASIZE=2): full at fill 2,
+so ast_F12_capacity (e2e) fails too."""
+
+[bug.explain]
+covers_lost = """Predicted no lost covers, without working each cover through. At ASIZE=2 the wrong code makes the
+full compare match when wbin XOR rbin = 2, i.e. at fill 2 while rbin = 0. cov_F17_full_before_rd_release
+needs fill = DEPTH while the reader is still in reset (rbin frozen at 0), so full stops the writer
+at fill 2 and the cover is unreachable. The other 21 stay reachable."""
+
+# ---- B07
+[[bug]]
+id      = "B07"
+patch   = "B07_binary_crossing.patch"
+title   = "Binary pointer crosses, converted to gray after the synchronizer"
+[bug.predict]
+static      = "no"
+cdc         = "no"
+sim_sb      = "no"
+sim_sva     = "yes"
+formal      = "white-box"
+prove       = "fail"
+covers_lost = []
+why = """Functionally identical in zero-delay RTL: gray(sync(wbin)) == sync(gray(wbin)) when every
+bit is sampled at once (plan R11). Only the source-side ast_F09_wptr_cdc_one_bit sees it, at the
+second write (1 -> 2 flips two bits) of every run. Formal: the same white-box labels and no e2e
+label within the bound; prove fails on invariants that read rq1/rq2 as gray."""
+
+[bug.explain]
+static = """Predicted no; caught only incidentally. With wptr_cdc driven by wbin, the gray register wptr is
+read by nothing but the property file, so lint (RTL alone, -Wall) reports UNUSEDSIGNAL 'wptr'
+and synth's flop count drops from 42 to 37 (opt_clean removes the 5 wptr flops). A designer who
+meant to send the binary pointer would delete the gray register, and then neither check fires.
+The structural CDC check passes B07 as predicted (only the R4 note), so this is not a method for B07."""
+
+# ---- B08
+[[bug]]
+id      = "B08"
+patch   = "B08_one_sync_stage.patch"
+title   = "One synchronizer stage deleted (read -> write path)"
+[bug.predict]
+static      = "yes"
+cdc         = "yes"
+sim_sb      = "no"
+sim_sva     = "no"
+formal      = "no"
+prove       = "fail"
+covers_lost = ["cov_F08_wfull_lag_k_minus_1"]
+why = """Flags stay conservative and only get one wclk edge faster, so no RTL check can fail.
+Static: lint -Wall reports wq2_rptr unused, and synth's flop count drops by ASIZE+1 (opt_clean
+removes the dead stage). prove fails, but only on inv_wfull_safe, an invariant written for a
+two-stage design (wfull judged against wq2_rptr), not on a spec label. The lag at the K-th wclk
+edge after a read disappears, so cov_F08_wfull_lag_k_minus_1 becomes unreachable. cdc: R2, stage 1
+(wq1_rptr) feeds the full compare."""
+
+[bug.explain]
+prove = """Predicted fail on inv_wfull_safe; it passes. I misjudged the timing: wfull computed from
+wq1_rptr falls at the same wclk edge where wq2_rptr copies wq1_rptr, so "wfull is safe against
+stage 2" still holds at every step, and so does every other invariant. So formal is blind to
+B08 entirely: bmc, k-induction and every spec property pass, which is plan R11 in its strongest
+form. Only the lag cover changes."""
+covers_lost = """Predicted only cov_F08_wfull_lag_k_minus_1. The cover run hits the 1800 s time limit in the
+50s of steps (the cell shows where), so this cell is bounded. cov_F08_wfull_lag_k_minus_1 is the
+real loss: rtl-v1 reaches it at step 15, B08 never does, and in simulation it has 0 hits in 140
+B08 runs against 1,866 on rtl-v1. cov_F13_two_wraps is a time-limit artifact: rtl-v1 needs 60
+steps for it, the B08 search does not get that far (each step's unsatisfiable query for the dead
+lag cover is slow), and the B08 simulations hit it 18,688 times, so it is reachable."""
+
+# ---- B09
+[[bug]]
+id      = "B09"
+patch   = "B09_sync_source_clock.patch"
+title   = "Write -> read synchronizer clocked by the source clock"
+[bug.predict]
+static      = "no"
+cdc         = "yes"
+sim_sb      = "no"
+sim_sva     = "stim"
+formal      = "e2e"
+prove       = "fail"
+covers_lost = []
+why = """The rempty lag is now counted in wclk edges: still conservative (no scoreboard error),
+but with a writer slower than about 1.5x the reader, rempty stays high more than K = 3 rclk edges
+after a write and ast_F08_rempty_exact fires (vplan: buckets B0/B1). Formal has free clocks, so it
+finds the slow-writer case: ast_F08_rempty_exact (e2e) as well as the white-box
+ast_F11_rsync_on_rclk. The plan's table said formal only with the white-box F11; this predicts an
+e2e catch. cdc: R3 (rq1/rq2 on wclk but reset by rrst_n) and R1 (rq2 reaches the rempty flop through
+the compare logic)."""
+
+# ---- B10
+[[bug]]
+id      = "B10"
+patch   = "B10_gray_addressing.patch"
+title   = "Memory addressed with gray bits instead of binary"
+[bug.predict]
+static      = "no"
+cdc         = "no"
+sim_sb      = "stim"
+sim_sva     = "stim"
+formal      = "e2e"
+prove       = "fail"
+covers_lost = []
+why = """Codes n and 31 - n share their low 4 bits, so live entries collide only across 15/16 and
+31/0 (and wider pairs at high fill). smoke_test writes 16 entries once and never crosses 15/16
+with two live entries, so it passes; tests that keep writing catch it (SB_MISMATCH, or
+ast_F14_rdata_stable when the overwritten slot is on rdata). Formal: ast_F02_tracked_word."""
+
+# ---- B11
+[[bug]]
+id      = "B11"
+patch   = "B11_full_early.patch"
+title   = "wfull asserts at DEPTH-1"
+[bug.predict]
+static      = "no"
+cdc         = "no"
+sim_sb      = "stim"
+sim_sva     = "stim"
+formal      = "e2e"
+prove       = "fail"
+covers_lost = ["cov_F04_blocked_write_at_full", "cov_F12_full_reached", "cov_F12_empty_after_full",
+               "cov_F16_rw_at_depth_m1", "cov_F17_full_before_rd_release"]
+why = """Safe but wrong: the scoreboard sees no error, but the M4 test checks do (F12_CAPACITY,
+F12_MAX_FILL, SMOKE, DRAIN_COUNT, THRASH_WEAK in thrash_full); random_rates and thrash_empty have
+no capacity check. With SVA, ast_F12_capacity / ast_F08_wfull_exact fire whenever fill reaches 15
+with reads paused; thrash_empty never gets there. The plan's table said "sim x"; M4's checks
+changed that. Formal: every cover that needs fill = DEPTH, or a write accepted at DEPTH-1, dies."""
+
+[bug.explain]
+covers_lost = """The five predicted covers are lost, plus cov_F13_two_wraps. The cover run hits the 1800 s
+time limit before step 60 (the cell shows where), so this cell is bounded. The five are real
+losses: each needs fill = DEPTH, or a write accepted at fill DEPTH-1, which a full flag at DEPTH-1
+forbids; rtl-v1 reaches all five by step 18, and the B11 simulations never hit the four that also
+run in simulation. cov_F13_two_wraps is the same time-limit artifact as in B08: rtl-v1 needs 60
+steps, and B11's passing simulations hit it 967 times."""
+
+# ---- B12
+[[bug]]
+id      = "B12"
+patch   = "B12_empty_reset_low.patch"
+title   = "rempty resets to 0"
+[bug.predict]
+static      = "no"
+cdc         = "no"
+sim_sb      = "stim"
+sim_sva     = "yes"
+formal      = "e2e"
+prove       = "fail"
+covers_lost = []
+why = """Harmful only if a read comes at the first rclk edge after release (then SB_UNDERFLOW);
+otherwise rempty recovers at that edge. ast_F01_rempty_high_in_reset fires at the first rclk edge
+inside reset, which every run has. Formal: ast_F01_rempty_high_in_reset at step 1."""
+[bug.explain]
+sim_sb = """Predicted stim; 0/140, and this is a stimulus gap the matrix found. B12 only hurts if a read
+comes at the first rclk edge after reset release. The read driver decides each edge from the
+previous edge's sample of rrst_n: at the release edge it still sees reset and sets req = 0, so
+the first edge out of reset never carries rinc (the write driver works the same way). The UVM
+stimulus therefore never exercises that edge. B12 is still caught in every run by
+ast_F01_rempty_high_in_reset and by formal (free inputs). Proposed fix for the owner (not done:
+it changes the stimulus, so SO-1/SO-2 would need rerunning): let the noise phase drive rinc/winc
+for the first edge after release too, and add a coverage item for an attempt at that edge."""

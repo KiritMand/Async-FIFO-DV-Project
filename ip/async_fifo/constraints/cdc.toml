@@ -1,0 +1,30 @@
+# constraints/cdc.toml — structural CDC rules for async_fifo, read by common/scripts/cdc_check.py
+# (`make cdc`, M8 step 5). Rules R1-R3 are described in the script's header.
+
+top = "async_fifo"
+
+# Clock domains: each clock and the asynchronous reset that belongs to it (spec §5).
+[domains]
+wclk = "wrst_n"
+rclk = "rrst_n"
+
+# Domain of each data port: inputs are sources, outputs are checked as destinations.
+[ports]
+winc   = "wclk"
+wdata  = "wclk"
+wfull  = "wclk"
+rinc   = "rclk"
+rdata  = "rclk"
+rempty = "rclk"
+
+# Waivers: rule, destination, source, reason. Listed in vplan §8 (CDC waivers).
+# The only one is the memory read path the plan names (M8 step 5): rdata is the memory, written
+# on wclk, read through the rbin-addressed mux. Not a synchronizer: the entry at rbin was written
+# at least K edges before the reader can see it (rempty is lowered only after the write pointer
+# has crossed), and it stays unchanged while it is on rdata (F14), so no rclk flop ever samples a
+# changing value. The pointers carry the synchronization; the data is qualified by them.
+[[waiver]]
+rule   = "R1"
+dest   = "rdata"
+source = "mem"
+reason = "memory read path: data qualified by the synchronized pointers (spec §6, F14)"

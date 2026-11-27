@@ -1,0 +1,30 @@
+# B07_binary_crossing.patch — planted bug B07 (M8; vplan §6), against tag rtl-v1.
+#
+# Binary write pointer sent across the clock boundary, converted to gray after the synchronizer.
+# Several bits change per increment, so a real synchronizer can capture a value that is
+# neither the old nor the new pointer (the hazard gray code exists to remove). RTL simulation
+# and RTL formal sample all bits at once, so nothing end to end can fail (plan R11); only the
+# source-side one-bit check sees it. Write->read path only. Violates F09.
+#
+# Applied by common/scripts/bug_matrix.py to a copy of rtl-v1 (never to rtl/).
+# Check by hand: git apply --check ip/async_fifo/bugs/B07_binary_crossing.patch
+--- a/ip/async_fifo/rtl/async_fifo.sv
++++ b/ip/async_fifo/rtl/async_fifo.sv
+@@ -95,7 +95,7 @@
+   end
+ 
+   // The gray write pointer leaves the write domain only through this net.
+-  assign wptr_cdc = wptr;
++  assign wptr_cdc = wbin;
+ 
+   // Read pointer -> write domain: two flops on the destination clock and reset.
+   always_ff @(posedge wclk or negedge wrst_n) begin
+@@ -119,7 +119,7 @@
+   end
+ 
+   // Empty: the next gray read pointer has caught up with the synchronized gray write pointer.
+-  assign rempty_next = (rgray_next == rq2_wptr);
++  assign rempty_next = (rgray_next == ((rq2_wptr >> 1) ^ rq2_wptr));
+ 
+   // Read pointer and empty flag. Loading rempty from *_next makes it see this edge's own read,
+   // so the next edge can never underflow. rempty resets to 1.

@@ -1,0 +1,19 @@
+# B04_read_while_empty.patch — planted bug B04 (M8; vplan §6), against tag rtl-v1.
+#
+# Read pointer advances on rinc even while empty.
+# A blocked read moves rbin/rptr past the write pointer; rempty then drops and the reader
+# pops entries that were never written. Needs a read attempt at empty. Violates F05, F07.
+#
+# Applied by common/scripts/bug_matrix.py to a copy of rtl-v1 (never to rtl/).
+# Check by hand: git apply --check ip/async_fifo/bugs/B04_read_while_empty.patch
+--- a/ip/async_fifo/rtl/async_fifo.sv
++++ b/ip/async_fifo/rtl/async_fifo.sv
+@@ -114,7 +114,7 @@
+ 
+   // Next read pointer: advance by one only on an accepted read, rinc && !rempty.
+   always_comb begin
+-    rbin_next  = rbin + {{ASIZE{1'b0}}, (rinc & ~rempty)};
++    rbin_next  = rbin + {{ASIZE{1'b0}}, rinc};
+     rgray_next = (rbin_next >> 1) ^ rbin_next;
+   end
+ 

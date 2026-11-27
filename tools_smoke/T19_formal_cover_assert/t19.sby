@@ -1,0 +1,17 @@
+# SymbiYosys job for T19: cover mode only (sby -f t19.sby).
+[options]
+mode cover
+depth 10
+
+# yosys-smtbmc with yices, as in the other formal experiments.
+[engines]
+smtbmc yices
+
+# Read with FORMAL, elaborate t19 as top.
+[script]
+read -formal t19.sv
+prep -top t19
+
+# Source copied into the task directory.
+[files]
+t19.sv

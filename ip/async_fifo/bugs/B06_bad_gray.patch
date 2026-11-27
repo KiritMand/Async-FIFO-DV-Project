@@ -1,0 +1,30 @@
+# B06_bad_gray.patch — planted bug B06 (M8; vplan §6), against tag rtl-v1.
+#
+# Wrong binary-to-gray conversion in both domains: bin ^ (bin << 1) instead of (bin >> 1) ^ bin.
+# Still a bijection, so the empty compare (equality) works, but the code changes up to two
+# bits per increment (not safe to synchronize) and one lap flips only the MSB, so the full
+# compare (two top bits inverted) matches at the wrong distance. Violates F09, F10 (and F06/F12
+# through the full flag).
+#
+# Applied by common/scripts/bug_matrix.py to a copy of rtl-v1 (never to rtl/).
+# Check by hand: git apply --check ip/async_fifo/bugs/B06_bad_gray.patch
+--- a/ip/async_fifo/rtl/async_fifo.sv
++++ b/ip/async_fifo/rtl/async_fifo.sv
+@@ -67,7 +67,7 @@
+   // Gray code (bin >> 1) ^ bin changes one bit per increment, so it can cross safely.
+   always_comb begin
+     wbin_next  = wbin + {{ASIZE{1'b0}}, (winc & ~wfull)};
+-    wgray_next = (wbin_next >> 1) ^ wbin_next;
++    wgray_next = wbin_next ^ (wbin_next << 1);
+   end
+ 
+   // Full: the next gray write pointer equals the synchronized gray read pointer with its two
+@@ -115,7 +115,7 @@
+   // Next read pointer: advance by one only on an accepted read, rinc && !rempty.
+   always_comb begin
+     rbin_next  = rbin + {{ASIZE{1'b0}}, (rinc & ~rempty)};
+-    rgray_next = (rbin_next >> 1) ^ rbin_next;
++    rgray_next = rbin_next ^ (rbin_next << 1);
+   end
+ 
+   // Empty: the next gray read pointer has caught up with the synchronized gray write pointer.

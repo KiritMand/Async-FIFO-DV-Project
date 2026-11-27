@@ -48,7 +48,7 @@ session: read its §2 and the section for the module we're working on.
   describe them in a SOURCE.txt beside them instead.
 
 ## Commands
-make help | lint | synth | smoke | sva-neg | vplan | sim TEST=<t> SEED=<s> SIM=<sim> | regress | cov
+make help | lint | synth | cdc | smoke | sva-neg | vplan | sim TEST=<t> SEED=<s> SIM=<sim> | regress | cov
 | formal TASK=<bmc|prove|cover|pdr|...> ASIZE=<n> | formal-audit | formal-signoff
 | formal-figures | bugs | mcy | results | clean
 Repo level: make tools-smoke [T="T1 T3"] (rerun toolchain experiments) | clean-all

@@ -1,0 +1,20 @@
+# B05_empty_current_ptr.patch — planted bug B05 (M8; vplan §6), against tag rtl-v1.
+#
+# rempty computed from the current read pointer instead of the next one.
+# The edge that reads the last entry still sees rptr != rq2_wptr, so rempty stays low one
+# edge too long and a back-to-back read underflows. Needs consecutive reads down to empty.
+# Violates F07 (rempty not optimistic). Same bug as the M7 preview in docs/formal_notes.md.
+#
+# Applied by common/scripts/bug_matrix.py to a copy of rtl-v1 (never to rtl/).
+# Check by hand: git apply --check ip/async_fifo/bugs/B05_empty_current_ptr.patch
+--- a/ip/async_fifo/rtl/async_fifo.sv
++++ b/ip/async_fifo/rtl/async_fifo.sv
+@@ -119,7 +119,7 @@
+   end
+ 
+   // Empty: the next gray read pointer has caught up with the synchronized gray write pointer.
+-  assign rempty_next = (rgray_next == rq2_wptr);
++  assign rempty_next = (rptr == rq2_wptr);
+ 
+   // Read pointer and empty flag. Loading rempty from *_next makes it see this edge's own read,
+   // so the next edge can never underflow. rempty resets to 1.

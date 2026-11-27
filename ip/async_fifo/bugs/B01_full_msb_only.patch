@@ -1,0 +1,21 @@
+# B01_full_msb_only.patch — planted bug B01 (M8; vplan §6), against tag rtl-v1.
+#
+# Full compare inverts only the MSB of the synchronized read pointer.
+# Gray pointers one lap apart differ in their TWO top bits; inverting one bit makes wfull
+# assert at a fill that depends on where the read pointer is (31 - 2*rbin mod 32 at ASIZE=4):
+# early at some positions, never at others, so the writer overflows the FIFO.
+# Violates F06 (wfull not optimistic), F12 (capacity).
+#
+# Applied by common/scripts/bug_matrix.py to a copy of rtl-v1 (never to rtl/).
+# Check by hand: git apply --check ip/async_fifo/bugs/B01_full_msb_only.patch
+--- a/ip/async_fifo/rtl/async_fifo.sv
++++ b/ip/async_fifo/rtl/async_fifo.sv
+@@ -72,7 +72,7 @@
+ 
+   // Full: the next gray write pointer equals the synchronized gray read pointer with its two
+   // MSBs inverted, i.e. the writer is exactly DEPTH entries (one lap) ahead of the reader.
+-  assign wfull_next = (wgray_next == {~wq2_rptr[ASIZE:ASIZE-1], wq2_rptr[ASIZE-2:0]});
++  assign wfull_next = (wgray_next == {~wq2_rptr[ASIZE], wq2_rptr[ASIZE-1:0]});
+ 
+   // Write pointer and full flag. Loading wfull from *_next makes it see this edge's own write,
+   // so the next edge can never overfill. wfull resets to 0.

@@ -1,0 +1,21 @@
+# B09_sync_source_clock.patch — planted bug B09 (M8; vplan §6), against tag rtl-v1.
+#
+# Write->read synchronizer clocked by the source clock (wclk) instead of the destination (rclk).
+# rq2_wptr is then just a delayed copy of wptr in the write domain, and the crossing moves to
+# the rempty compare logic (combinational logic on a multi-bit asynchronous input). In RTL the
+# flag stays conservative, but its lag is counted in wclk edges, so with a slow writer rempty
+# stays high longer than K = 3 rclk edges. Violates F11 (and F08 when the writer is slow).
+#
+# Applied by common/scripts/bug_matrix.py to a copy of rtl-v1 (never to rtl/).
+# Check by hand: git apply --check ip/async_fifo/bugs/B09_sync_source_clock.patch
+--- a/ip/async_fifo/rtl/async_fifo.sv
++++ b/ip/async_fifo/rtl/async_fifo.sv
+@@ -143,7 +143,7 @@
+   assign rptr_cdc = rptr;
+ 
+   // Write pointer -> read domain: two flops on the destination clock and reset 
+-  always_ff @(posedge rclk or negedge rrst_n) begin
++  always_ff @(posedge wclk or negedge rrst_n) begin
+     if (!rrst_n) begin
+       rq1_wptr <= '0;
+       rq2_wptr <= '0;

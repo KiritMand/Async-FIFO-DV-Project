@@ -33,6 +33,10 @@ CONC_SRC   = $(IP_ROOT)/sva/async_fifo_sva_concurrent.sv
 # The property blocks sample each reset level at clock edges (F01), which Verilator's -Wall style
 # warning SYNCASYNCNET reports at the RTL's reset ports; property code is never synthesized.
 PROPS_VLT  = +define+ASYNC_FIFO_PROPS +incdir+$(PROPS_DIR) -Wno-SYNCASYNCNET
+# SVA=0 (M8): the UVM build without assertions (Verilator --no-assert via the sim layer's ASSERT=0):
+# white-box, e2e and asm_ checks are gone, the scoreboard and test checks stay. This is the bug
+# matrix's scoreboard-only column; it has its own build directory and is never a sign-off build.
+SVA       ?= 1
 
 # ---- Run controls: which simulator/test/seed/clock ratio/formal task; J = parallel jobs.
 SIM       ?= verilator# DEC-001 (docs/decisions.md)
@@ -44,7 +48,7 @@ J         ?= $(shell nproc 2>/dev/null || echo 4)
 
 # ---- Parameters: per-flow defaults (sim ASIZE=4 DSIZE=8; formal/MCY ASIZE=3 DSIZE=4).
 # Target-specific `?=` so a command-line ASIZE=/DSIZE= still wins.
-SIM_FLOWS    := lint synth smoke sva-neg sim sim-build regress cov bugs
+SIM_FLOWS    := lint synth cdc smoke sva-neg sim sim-build regress cov bugs
 FORMAL_FLOWS := formal formal-audit formal-signoff mcy
 $(SIM_FLOWS):    ASIZE ?= 4
 $(SIM_FLOWS):    DSIZE ?= 8
@@ -60,7 +64,7 @@ define stub
 endef
 
 .DEFAULT_GOAL := help
-.PHONY: help lint synth smoke sva-neg vplan sim sim-build regress cov formal formal-audit formal-signoff formal-figures bugs mcy results clean
+.PHONY: help lint synth cdc smoke sva-neg vplan sim sim-build regress cov formal formal-audit formal-signoff formal-figures bugs mcy results clean
 
 # Self-documenting help: lists every rule that has a "## " description, plus variables.
 help: ## [M0] List targets and variables
@@ -70,7 +74,7 @@ help: ## [M0] List targets and variables
 	@echo "Variables (current value):"
 	@echo "  RTL_DIR=$(RTL_DIR)"
 	@echo "  DUT_SRCS=$(DUT_SRCS)"
-	@echo "  SIM=$(SIM)  TEST=$(TEST)  SEED=$(SEED)  RATIO=$(RATIO)  J=$(J)"
+	@echo "  SIM=$(SIM)  TEST=$(TEST)  SEED=$(SEED)  RATIO=$(RATIO)  J=$(J)  SVA=$(SVA) (0: UVM build without assertions)"
 	@echo "  TASK=$(TASK) (bmc|prove|cover|pdr|audit_a0N|prove_noinv|pdr_noinv)  EXPECT=pass|fail|nopass|any  TIMEOUT=<s>"
 	@echo "  ASIZE/DSIZE: sim 4/8, formal+mcy 3/4 unless set; FORMAL_SIZES=\"$(FORMAL_SIZES)\" for formal-signoff"
 	@echo "  OUT=$(OUT)"
@@ -81,7 +85,7 @@ help: ## [M0] List targets and variables
 VLT_GUARD  := -Werror-USERERROR
 # Variables for the printed repro line: sizes, plus any RTL or OUT override given on the command
 # line (an RTL variant built into its own OUT must rerun there, not over the default runs).
-REPRO_VARS  = ASIZE=$(ASIZE) DSIZE=$(DSIZE)$(if $(filter command line,$(origin RTL_DIR)), RTL_DIR=$(RTL_DIR))$(if $(filter command line,$(origin DUT_SRCS)), DUT_SRCS='$(DUT_SRCS)')$(if $(filter command line,$(origin OUT)), OUT=$(OUT))
+REPRO_VARS  = ASIZE=$(ASIZE) DSIZE=$(DSIZE)$(if $(filter command line,$(origin RTL_DIR)), RTL_DIR=$(RTL_DIR))$(if $(filter command line,$(origin DUT_SRCS)), DUT_SRCS='$(DUT_SRCS)')$(if $(filter command line,$(origin OUT)), OUT=$(OUT))$(if $(filter command line,$(origin SVA)), SVA=$(SVA))
 # Illegal sizes the RTL guards must reject (spec §2), as ASIZE:DSIZE:<parameter whose guard fires>.
 # lint checks them in Verilator, synth in Yosys; each must fail with that guard's own message.
 GUARD_CASES = 1:4:ASIZE 4:0:DSIZE
@@ -139,6 +143,15 @@ synth: ## [M1] Yosys: guards reject bad sizes, check -assert, pre-opt flop count
 	yosys -q -l $(OUT)/synth/synth.log -p '$(YOSYS_READ); synth -top async_fifo; tee -o $(OUT)/synth/stat.txt stat'
 	@grep -E '[0-9]+ +(cells|\$$_)' $(OUT)/synth/stat.txt | sed 's/^ */  /'
 	@echo "synth PASS: check -assert clean, $(FLOPS) async-reset flops before optimization   repro: make synth $(REPRO_VARS)"
+
+# Structural CDC check (M8 step 5): the Yosys netlist as a flop graph, checked by
+# common/scripts/cdc_check.py against R1 (no logic on a crossing), R2 (stage 1 feeds only stage 2)
+# and R3 (each flop reset by its own domain's reset); domains, port domains and the waiver (the
+# memory read path, vplan §8) are in constraints/cdc.toml.
+CDC_CFG = $(IP_ROOT)/constraints/cdc.toml
+cdc: ## [M8] Structural CDC check: R1 no logic on a crossing, R2 two stages, R3 destination reset
+	python3 $(COMMON)/scripts/cdc_check.py --rtl $(DUT_SRCS) --config $(CDC_CFG) --param ASIZE=$(ASIZE) \
+	  --param DSIZE=$(DSIZE) --out $(OUT)/cdc --repro 'make cdc $(REPRO_VARS)'
 
 # Directed non-UVM smoke test (tb/smoke/tb_smoke.sv), built once per ASIZE/DSIZE; the clock ratio
 # is a run-time plusarg, so one build runs every ratio. Default: 1:3 and 3:1 (M1 Done-when).
@@ -207,8 +220,9 @@ TB_PRE      = $(COMMON)/uvm/clk_rst_if.sv $(TB_DIR)/pkg/fifo_params_pkg.sv $(TB_
               $(TB_DIR)/if/fifo_rd_if.sv $(TB_DIR)/pkg/fifo_tb_pkg.sv
 TB_INCDIRS  = $(addprefix $(TB_DIR)/,agents/wr agents/rd env seq tests)
 TB_DEPS     = $(shell find $(TB_DIR) $(COMMON)/uvm -name '*.sv' -o -name '*.svh') $(COMMON)/sim/$(SIM).mk
-# One build per simulator, size and RTL source list, so M8/M9 builds of patched RTL coexist.
-BUILD_TAG   = $(SIM)_a$(ASIZE)_d$(DSIZE)_$(shell echo '$(DUT_SRCS)' | md5sum | cut -c1-8)
+# One build per simulator, size, assertion setting and RTL source list, so M8/M9 builds of
+# patched RTL coexist.
+BUILD_TAG   = $(SIM)_a$(ASIZE)_d$(DSIZE)$(if $(filter 0,$(SVA)),_nosva)_$(shell echo '$(DUT_SRCS)' | md5sum | cut -c1-8)
 PLUSARGS   ?=
 # Code coverage (line, branch, toggle) is for the design only: no UVM, testbench, common TB or
 # property code. Cover statements in the excluded property files still count (toolchain T14).
@@ -224,7 +238,8 @@ SIM_BUILD_ARGS = TOP=tb_top SRCS="$(TB_PRE) $(DUT_SRCS) $(E2E_SRC) $(CONC_SRC) $
 	  INCDIRS="$(TB_INCDIRS) $(PROPS_DIR)" \
 	  DEFINES="FIFO_ASIZE=$(ASIZE) FIFO_DSIZE=$(DSIZE) ASYNC_FIFO_PROPS" \
 	  DEPS="$(TB_DEPS) $(DUT_SRCS) $(PROPS_SVH) $(E2E_SRC) $(CONC_SRC)" \
-	  BUILD_DIR=$(OUT)/build/$(BUILD_TAG) J=$(J) UVM_HOME=$(UVM_HOME) COV_EXCLUDE="$(COV_EXCLUDE)"
+	  BUILD_DIR=$(OUT)/build/$(BUILD_TAG) J=$(J) UVM_HOME=$(UVM_HOME) COV_EXCLUDE="$(COV_EXCLUDE)" \
+	  ASSERT=$(if $(filter 0,$(SVA)),0,1)
 
 # One UVM test at one seed: build once per configuration, run in out/.../run/<RUN>_<seed>/,
 # judge the log, print the reproduction command. Delegates to common/sim/<SIM>.mk.
@@ -254,18 +269,21 @@ REGRESS_REPRO = make regress SIM=$(SIM) $(REPRO_VARS)$(if $(N), N=$(N))$(if $(TE
 # the target's exit status stays the regression's. The formal sign-off (M7) is added when its
 # JSON exists; the test runs in the shell because make expands a whole recipe before running it,
 # so $(wildcard) would miss a file the same recipe has just written (formal-signoff).
+# Only the real RTL with assertions may rewrite the committed status page: a regression of patched
+# RTL (RTL_DIR/DUT_SRCS on the command line) or of an SVA=0 build skips it.
+REAL_RTL     = $(if $(filter command line,$(origin RTL_DIR) $(origin DUT_SRCS) $(origin SVA)),,1)
 VPLAN_STATUS = $(VPLAN_CHK) --annotate --cov $(OUT)/cov/functional.json --results $(OUT)/regress/results.json \
                `test -f $(OUT)/formal/signoff.json && echo --formal $(OUT)/formal/signoff.json`
 regress: ## [M5] Parallel regression from regress/tests.toml: [N=seeds] [TESTS="id ..."] [RECHECK=k]
 	@rc=0; $(REGRESS) -j $(J) $(if $(N),--seeds $(N)) $(if $(TESTS),--only $(TESTS)) \
 	  $(if $(filter-out 0,$(RECHECK)),--recheck $(RECHECK)) --repro '$(REGRESS_REPRO)' || rc=$$?; \
-	  if [ $$rc -ne 2 ]; then $(VPLAN_STATUS) || true; fi; exit $$rc
+	  if [ $$rc -ne 2 ] && [ -n "$(REAL_RTL)" ]; then $(VPLAN_STATUS) || true; fi; exit $$rc
 
 # Merges the per-run coverage databases of the last regression into one report (sign-off SO-1),
 # then rewrites docs/vplan_status.md.
 cov: ## [M5] Re-merge the last regression's coverage into $(OUT)/cov/ and update docs/vplan_status.md
 	@rc=0; $(REGRESS) --merge-only --repro 'make cov SIM=$(SIM) $(REPRO_VARS)' || rc=$$?; \
-	  if [ $$rc -ne 2 ]; then $(VPLAN_STATUS) || true; fi; exit $$rc
+	  if [ $$rc -ne 2 ] && [ -n "$(REAL_RTL)" ]; then $(VPLAN_STATUS) || true; fi; exit $$rc
 
 # ---- Formal (M7, sign-off SO-3): SymbiYosys on formal/async_fifo.sby. formal_run.py writes a
 # per-size copy (out/<ip>/formal/a<ASIZE>_d<DSIZE>/) with absolute sources, so RTL_DIR/DUT_SRCS
@@ -329,9 +347,21 @@ formal-figures: ## [M7] Cover traces (fill-full-drain, pointer wrap) as SVG in d
 	  --label p_e2e.fill="fill (checker)" --label p_e2e.rd_total="reads (saturating)" $(FIG_SIGS_WRAP)
 	@echo "formal-figures PASS: $(FIG_DIR)/formal_*_a$(ASIZE).svg   repro: make formal-figures $(REPRO_VARS)"
 
-# Applies each planted bug patch and records which method catches it (report Q-1).
-bugs: ## [M8] Planted-bug detection matrix -> docs/bug_matrix.md
-	$(call stub,M8,python3 $(COMMON)/scripts/bug_matrix.py --bugs $(IP_ROOT)/bugs)
+# Planted-bug detection matrix (M8, report Q-1): bug_matrix.py applies each bugs/*.patch to a copy
+# of rtl-v1 under $(OUT)/bugs/<id>/, runs static checks (lint, synth, cdc), the bugs.toml subset of the
+# regression without (SVA=0) and with assertions, and formal (bmc_bugs, prove, cover), then writes
+# docs/bug_matrix.md: actual versus prediction. BUGS="base B03" picks ids, METHODS="static sim_sb
+# sim_sva formal" picks parts, REPORT_ONLY=1 rebuilds the page from saved results. A full run is
+# about 2.5 h (26 UVM builds); fails if the baseline is not clean, a result is missing or stale, or
+# a difference from a prediction is unexplained.
+BUGS        ?=
+METHODS     ?=
+REPORT_ONLY ?= 0
+BUGS_REPRO   = make bugs$(if $(BUGS), BUGS="$(BUGS)")$(if $(METHODS), METHODS="$(METHODS)")$(if $(filter 1,$(REPORT_ONLY)), REPORT_ONLY=1)
+bugs: ## [M8] Planted-bug matrix -> docs/bug_matrix.md [BUGS="base B03"] [METHODS="static sim_sb sim_sva formal"] [REPORT_ONLY=1]
+	python3 $(COMMON)/scripts/bug_matrix.py --ip-root $(IP_ROOT) --out $(OUT)/bugs -j $(J) \
+	  --sim-vars "ASIZE=$(ASIZE) DSIZE=$(DSIZE)" $(if $(BUGS),--only $(BUGS)) $(if $(METHODS),--methods $(METHODS)) \
+	  $(if $(filter 1,$(REPORT_ONLY)),--report-only) --repro '$(BUGS_REPRO)'
 
 # Mutation testing: how many automatic RTL mutations the checks detect (report Q-2).
 mcy: ## [M9] MCY mutation coverage

@@ -1,6 +1,6 @@
 # async_fifo — Verification plan
 
-**Version** 0.5 · **Date** 2026-11-24 · **Status** DRAFT: owner decisions applied (feature-table
+**Version** 0.6 · **Date** 2026-11-25 · **Status** DRAFT: owner decisions applied (feature-table
 edits, power-up-only resets, N = 200); full text awaiting owner review ·
 **Spec** [`spec.md`](spec.md) v1.1 · **RTL** `rtl/async_fifo.sv`, tag `rtl-v1`
 
@@ -412,6 +412,23 @@ checks this plan expects to catch it.
 | B11 | `wfull` asserts at DEPTH−1 | F08, F12 | `ast_F12_capacity`<br>`ast_F08_wfull_exact` | Safe but wrong: the scoreboard sees no error, and `cg_fill.cp_fill` full stays a hole |
 | B12 | `rempty` resets to 0 | F01, F07 | `ast_F01_rempty_high_in_reset`<br>`ast_F07_rempty_not_optimistic` | Fires at the first `rclk` edge in reset |
 
+**As built (M8).** The patches are `bugs/B01_*.patch` … `bugs/B12_*.patch`, against `rtl-v1`.
+Predictions (written before the run) and the explanation of every difference are in
+`bugs/bugs.toml`; the results are in `docs/bug_matrix.md` (`make bugs`). Each bug runs through:
+- static checks: `make lint`, `make synth`, and the new `make cdc`;
+- the scoreboard-only simulation (`SVA=0`) and the full simulation, on seeds 1–20 of the seven
+  tests;
+- formal at ASIZE=2: `bmc_bugs`, `prove` and `cover`.
+
+The Expected catch column above is kept as planned. Where the results differ from it:
+- **B08** is caught by none of the listed functional checks. `make synth` catches it, and so
+  do `make lint` and the structural check `make cdc` (rule R2). Its only functional trace is the
+  unreachable `cov_F08_wfull_lag_k_minus_1`. Even `prove` passes.
+- **B09** is also caught by the e2e `ast_F08_rempty_exact`, in simulation and in formal.
+- **B11** is caught without assertions too, by the M4 test checks (`F12_CAPACITY`, `SMOKE`, …).
+- **B12** is never caught by the scoreboard: the stimulus never reads at the first `rclk` edge
+  after release. This is a testbench gap; the proposed fix is in `bugs/bugs.toml`.
+
 ---
 
 ## 7. Sign-off
@@ -454,6 +471,16 @@ approval (integrity rule). Every exclusion is listed here.
 
 None.
 
+**CDC waivers (M8).** The structural CDC check (`make cdc`: `common/scripts/cdc_check.py` with the
+rules and domains of `constraints/cdc.toml`) has one waiver. It is the one plan M8 step 5
+specifies: rule R1 (no logic on a crossing) on the memory read path, `mem` (written on `wclk`) →
+`rdata` (read domain) through the `rbin`-addressed read mux.
+- **Reason:** the data is qualified by the synchronized pointers. An entry becomes visible only
+  after its write pointer has crossed, and it stays unchanged while it is on `rdata` (F14). No
+  `rclk` flop ever samples a changing value.
+- **Approval:** the owner approved doing step 5 on 2026-11-25. Confirmation of the waiver itself
+  is requested at the M8 close-out.
+
 ---
 
 ## 9. Out of scope
@@ -484,3 +511,4 @@ From spec §12, plus limits of the methods used:
 | 0.3 | 2026-11-24 | Claude | M5: F16 stimulus adds the directed aligned thrash entries (closure H02). §2.2 describes the directed entries, per-test seeding (H01) and the thrash reset wait (H03). §3 records how the coverage model was built (helper `cp_bucket`, `int_ratio` bin name, sampling hooks, the limit of `cp_phase`). §7 has the measured run time. No bin, check or property changed. |
 | 0.4 | 2026-11-24 | Claude | M6: properties coded. §1.2 adds the concurrent twins and the negative tests. §4: A01's simulation form is "at the first rising edge of either clock" (owner, DEC-010; the old wording fails on a legal testbench whose `rrst_n` is released before `wclk` first rises); "As built (M6)" notes (sampling, true fill, the F08 window and reset guards, history, assumption checks, failure messages, negative tests). §5 A01 Simulation cell matches. No intent weakened, no bin, check or assumption added or removed. |
 | 0.5 | 2026-11-24 | Claude | M7: formal. §1.2 formal row (harness files, evidence). §4 "As built (M7)" (harness inside the DUT, A02 and A03 in the formal step model, named history registers instead of `$past` on design clocks, F02/F03 tracking, 25 induction invariants, SBY tasks). §5: A03 not adopted (DEC-011 D2); audit results recorded; A02 found unnecessary in formal (retirement is the owner's decision). §7 SO-3 evidence. No intent weakened; no bin, check or assumption added or removed. |
+| 0.6 | 2026-11-25 | Claude | M8: §6 "As built (M8)": patches, predictions and explanations in `bugs/`, results in `docs/bug_matrix.md`, and where the results differ from the Expected catch column (B08 structural only, B09 also e2e, B11 also by UVM test checks, B12 a stimulus gap). §8 records the one CDC waiver of the new structural check (`make cdc`; owner confirmation requested). No feature, bin, check, property or assumption changed. |

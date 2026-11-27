@@ -1,0 +1,29 @@
+# B10_gray_addressing.patch — planted bug B10 (M8; vplan §6), against tag rtl-v1.
+#
+# Memory addressed with the low bits of the gray pointers instead of the binary pointers.
+# Both ports use the same mapping, so data comes back in order until two live entries map to
+# one slot: gray codes n and n+1 share their low ASIZE bits at the half-wrap (e.g. 3 and 4 at
+# ASIZE=2), so the newer write overwrites an unread entry. Violates F02, F03.
+#
+# Applied by common/scripts/bug_matrix.py to a copy of rtl-v1 (never to rtl/).
+# Check by hand: git apply --check ip/async_fifo/bugs/B10_gray_addressing.patch
+--- a/ip/async_fifo/rtl/async_fifo.sv
++++ b/ip/async_fifo/rtl/async_fifo.sv
+@@ -91,7 +91,7 @@
+   // Memory write port: store wdata only on an accepted write. The !wfull gate is what makes a
+   // write while full harmless.
+   always_ff @(posedge wclk) begin
+-    if (winc && !wfull) mem[wbin[ASIZE-1:0]] <= wdata;
++    if (winc && !wfull) mem[wptr[ASIZE-1:0]] <= wdata;
+   end
+ 
+   // The gray write pointer leaves the write domain only through this net.
+@@ -137,7 +137,7 @@
+ 
+   // Show-ahead read port: combinational read at the current read address, no output register.
+   // Valid whenever !rempty; don't-care while empty.
+-  assign rdata = mem[rbin[ASIZE-1:0]];
++  assign rdata = mem[rptr[ASIZE-1:0]];
+ 
+   // The gray read pointer leaves the read domain only through this net 
+   assign rptr_cdc = rptr;

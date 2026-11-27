@@ -6,7 +6,8 @@ and absolute source paths (so RTL_DIR/DUT_SRCS overrides reach formal), runs
 `sby -f -d <out>/a<ASIZE>_d<DSIZE>/<task> <copy> <task>`, and reads the log:
 
   * verdict (PASS / FAIL / UNKNOWN / TIMEOUT / ERROR), wall time;
-  * failed assertion labels, reached and unreached covers (with steps), trace files;
+  * failed assertion labels (with the bmc step where each first failed), reached and unreached
+    covers (with steps), trace files;
   * Yosys warnings that make a proof meaningless: an implicitly declared net (a hierarchical
     reference becomes a free wire, toolchain T18) or a net with no driver. Either is an error.
 
@@ -32,6 +33,7 @@ from pathlib import Path
 DONE_RE = re.compile(r"DONE \((\w+), rc=(\d+)\)")
 FAILED_RE = re.compile(r"summary:\s+failed assertion (\S+) at")
 ASSERT_FAILED_RE = re.compile(r"Assert failed in (\S+): (\S+)")
+STEP_RE = re.compile(r"Checking assertions in step (\d+)")
 REACHED_RE = re.compile(r"Reached cover statement in step (\d+) at (\S+): (\S+)")
 UNREACHED_RE = re.compile(r"[Uu]nreached cover statement at (\S+): (\S+)|summary:\s+unreached cover statement (\S+) at")
 TRACE_RE = re.compile(r"(?:counterexample|cover) trace(?: \[\w+\])?: (\S+\.vcd)")
@@ -49,6 +51,7 @@ class Run:
     verdict: str = "NOT RUN"
     seconds: float = 0.0
     failed: list[str] = field(default_factory=list)
+    failed_steps: dict[str, int] = field(default_factory=dict)
     reached: dict[str, int] = field(default_factory=dict)
     unreached: list[str] = field(default_factory=list)
     traces: list[str] = field(default_factory=list)
@@ -143,6 +146,14 @@ def parse_log(run: Run, text: str, status: str = "") -> None:
     labels = {f.split(".")[-1] for f in FAILED_RE.findall(text)}
     labels |= {lab for _, lab in ASSERT_FAILED_RE.findall(text)}
     run.failed = sorted(labels)
+    # First failing step per label: bmc prints "Checking assertions in step N" before the
+    # failures it finds there (--keep-going repeats them later, marked "[failed before]").
+    step = None
+    for ln in text.splitlines():
+        if (m2 := STEP_RE.search(ln)):
+            step = int(m2.group(1))
+        elif (m2 := ASSERT_FAILED_RE.search(ln)) and step is not None:
+            run.failed_steps.setdefault(m2.group(2), step)
     for step, _, lab in REACHED_RE.findall(text):
         run.reached.setdefault(lab, int(step))
     for a, b, c in UNREACHED_RE.findall(text):

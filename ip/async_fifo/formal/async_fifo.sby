@@ -18,10 +18,13 @@
 # needed, and does PDR find its own? Words after a task name are tags; a line prefix naming
 # several tasks is rejected (T17), so shared lines use tags: std = standard read, smt = plain
 # smtbmc, kind = k-induction, pdr_eng = ABC PDR, audit = bmc audit, noinv = no invariants,
-# bmcmode = plain bmc.
+# bmcmode = plain bmc. bmc_bugs (M8 bug matrix) is bmc_spec with --keep-going: it runs to the
+# full depth and lists every spec label that fails, with its step, so the matrix can say whether
+# an e2e or only a white-box property caught a planted bug.
 [tasks]
 bmc std smt bmcmode
 bmc_spec noinv smt bmcmode
+bmc_bugs noinv
 prove std smt kind
 cover std smt
 pdr std pdr_eng
@@ -39,6 +42,8 @@ pdr_noinv noinv pdr_eng
 bmcmode: mode bmc
 bmc: depth 40
 bmc_spec: depth 20
+bmc_bugs: mode bmc
+bmc_bugs: depth 20
 kind: mode prove
 kind: depth 6
 cover: mode cover
@@ -48,11 +53,12 @@ audit: mode bmc
 audit: depth 30
 multiclock on
 
-# Engines: yosys-smtbmc with yices; --keep-going for the bmc audits (report every failure);
-# ABC's PDR for the pdr_eng tasks (it finds its own invariants: a cross-check on ours).
+# Engines: yosys-smtbmc with yices; --keep-going for the bmc audits and bmc_bugs (report every
+# failure); ABC's PDR for the pdr_eng tasks (it finds its own invariants: a cross-check on ours).
 [engines]
 smt: smtbmc yices
 audit: smtbmc --keep-going yices
+bmc_bugs: smtbmc --keep-going yices
 pdr_eng: abc pdr
 
 # Read the checker and the RTL with FORMAL and the property include, plus each task's defines.

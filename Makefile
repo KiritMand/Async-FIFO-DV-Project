@@ -4,7 +4,8 @@
 # Which block to drive (future projects add ip/<name>/), and the targets every block offers.
 IP      ?= async_fifo
 IPS     := $(notdir $(wildcard ip/*))
-TARGETS := help lint synth smoke sva-neg vplan sim sim-build regress cov formal bugs mcy results clean
+TARGETS := help lint synth cdc smoke sva-neg vplan sim sim-build regress cov formal formal-audit formal-signoff \
+           formal-figures bugs mcy results clean
 
 .DEFAULT_GOAL := help
 .PHONY: $(TARGETS) clean-all tools-smoke
@@ -19,7 +20,7 @@ help: _help_banner
 _help_banner:
 	@echo "Block: IP=$(IP)   (available: $(IPS))"
 	@echo "Repo targets:"
-	@echo "  tools-smoke   rerun toolchain experiments tools_smoke/T1..T18 (T=\"T1 T3\" for a subset)"
+	@echo "  tools-smoke   rerun toolchain experiments tools_smoke/T1..T19 (T=\"T1 T3\" for a subset)"
 	@echo "  clean-all     remove all of out/"
 	@echo ""
 .PHONY: _help_banner

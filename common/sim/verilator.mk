@@ -8,6 +8,7 @@
 #          TEST  SEED  PLUSARGS  J  UVM_HOME  REPRO (the make command printed for reproduction)
 #          COV_TYPES (coverage kinds)  COV_EXCLUDE (path globs that get no code coverage)
 #          NO_BUILD=1 (run the existing binary only)
+#          ASSERT=0 (build without assertions: the M8 bug matrix's scoreboard-only column)
 
 # ---- Paths and toolchain (pinned OSS CAD Suite on PATH).
 SIM_MK   := $(abspath $(lastword $(MAKEFILE_LIST)))
@@ -30,6 +31,10 @@ COV_TYPES   ?= user line branch toggle
 COV_EXCLUDE ?=
 COV_VLT      = $(BUILD_DIR)/cov_scope.vlt
 
+# ---- Assertions (M8): on by default in this Verilator (toolchain T14). ASSERT=0 adds --no-assert,
+# which removes every immediate and concurrent assertion and leaves cover records at count 0.
+ASSERT      ?= 1
+
 # ---- Build command. --timing: delays and clocking blocks; --vpi: UVM's DPI layer; --trace:
 # allows +trace dumps; 1 ps resolution; random initial values chosen per seed at run time
 # (toolchain T9); -Werror-USERERROR keeps the RTL parameter guards fatal (T7). Default warning
@@ -37,7 +42,7 @@ COV_VLT      = $(BUILD_DIR)/cov_scope.vlt
 # the C++ compile BUILD_J jobs.
 VLT_FLAGS = --binary --timing --vpi --trace --verilate-jobs $(J) --build-jobs $(BUILD_J) --timescale 1ps/1ps \
             --x-assign unique --x-initial unique -Werror-USERERROR \
-            $(addprefix --coverage-,$(COV_TYPES)) \
+            $(addprefix --coverage-,$(COV_TYPES)) $(if $(filter 0,$(ASSERT)),--no-assert) \
             --top-module $(TOP) -Mdir $(BUILD_DIR)
 # `env -u MAKEFLAGS ...`: our command-line variables would otherwise reach Verilator's own
 # generated makefile, where DEPS is an internal variable (overriding it breaks the build).

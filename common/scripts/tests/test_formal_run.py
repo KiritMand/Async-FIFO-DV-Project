@@ -104,6 +104,19 @@ class TestFormalRun(unittest.TestCase):
         self.assertTrue(r.ok())
 
     # Cover: covers with their first step, and each cover mapped to its trace from the status file.
+    def test_parse_keep_going_steps(self):
+        # --keep-going bmc: each label's first failing step, repeats marked "[failed before]".
+        log = ("SBY 1 [x] engine_0: ##   0:00:00  Checking assertions in step 4..\n"
+               "SBY 1 [x] engine_0: ##   0:00:00  Assert failed in top: ast_a\n"
+               "SBY 1 [x] engine_0: ##   0:00:00  Checking assertions in step 9..\n"
+               "SBY 1 [x] engine_0: ##   0:00:00  Assert failed in top: ast_a [failed before]\n"
+               "SBY 1 [x] engine_0: ##   0:00:00  Assert failed in top.p_e2e: ast_b\n"
+               "SBY 1 [x] DONE (FAIL, rc=2)\n")
+        r = formal_run.parse_run("bmc_bugs:2:fail")
+        formal_run.parse_log(r, log)
+        self.assertEqual(r.failed, ["ast_a", "ast_b"])
+        self.assertEqual(r.failed_steps, {"ast_a": 4, "ast_b": 9})
+
     def test_parse_cover(self):
         r = formal_run.Run("cover", 3)
         formal_run.parse_log(r, LOG_COVER, STATUS_COVER)
