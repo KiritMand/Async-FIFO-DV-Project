@@ -50,7 +50,7 @@ session: read its §2 and the section for the module we're working on.
 ## Commands
 make help | lint | synth | cdc | smoke | sva-neg | vplan | sim TEST=<t> SEED=<s> SIM=<sim> | regress | cov
 | formal TASK=<bmc|prove|cover|pdr|...> ASIZE=<n> | formal-audit | formal-signoff
-| formal-figures | bugs | mcy | results | clean
+| formal-figures | bugs | mcy-pick | mcy [MCY_SEED= MCY_PROBE=] | results | clean
 Repo level: make tools-smoke [T="T1 T3"] (rerun toolchain experiments) | clean-all
 
 ## Toolchain

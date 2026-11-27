@@ -37,6 +37,13 @@ PROPS_VLT  = +define+ASYNC_FIFO_PROPS +incdir+$(PROPS_DIR) -Wno-SYNCASYNCNET
 # white-box, e2e and asm_ checks are gone, the scoreboard and test checks stay. This is the bug
 # matrix's scoreboard-only column; it has its own build directory and is never a sign-off build.
 SVA       ?= 1
+# MCY=1 (M9): the UVM build for mutation testing. DUT_SRCS is then MCY's mutated netlist (Yosys
+# Verilog at fixed sizes with a mutsel port, toolchain T20): tb_top drops the parameter overrides
+# and drives mutsel from +mutsel=; the netlist's WIDTHEXPAND warnings are waived for that file
+# only (mcy/verilator_netlist.vlt); functional coverage only (code coverage of a netlist means
+# nothing, and the build is faster). Own build directory; never a sign-off build.
+MCY       ?= 0
+MCY_VLT    = $(IP_ROOT)/mcy/verilator_netlist.vlt
 
 # ---- Run controls: which simulator/test/seed/clock ratio/formal task; J = parallel jobs.
 SIM       ?= verilator# DEC-001 (docs/decisions.md)
@@ -46,14 +53,17 @@ RATIO     ?= 1:1
 TASK      ?= prove
 J         ?= $(shell nproc 2>/dev/null || echo 4)
 
-# ---- Parameters: per-flow defaults (sim ASIZE=4 DSIZE=8; formal/MCY ASIZE=3 DSIZE=4).
+# ---- Parameters: per-flow defaults (sim ASIZE=4 DSIZE=8; formal ASIZE=3 DSIZE=4; MCY ASIZE=2 DSIZE=4).
 # Target-specific `?=` so a command-line ASIZE=/DSIZE= still wins.
 SIM_FLOWS    := lint synth cdc smoke sva-neg sim sim-build regress cov bugs
-FORMAL_FLOWS := formal formal-audit formal-signoff mcy
+FORMAL_FLOWS := formal formal-audit formal-signoff
 $(SIM_FLOWS):    ASIZE ?= 4
 $(SIM_FLOWS):    DSIZE ?= 8
 $(FORMAL_FLOWS): ASIZE ?= 3
 $(FORMAL_FLOWS): DSIZE ?= 4
+# MCY runs at the vplan's mutation size (vplan §1: ASIZE = 2, DSIZE = 4).
+mcy mcy-pick: ASIZE ?= 2
+mcy mcy-pick: DSIZE ?= 4
 
 # stub,<module>,<planned command>: placeholder recipe for targets not built yet. Prints the
 # planned command, names the module that builds it, and exits 2 so it never counts as a pass.
@@ -64,7 +74,7 @@ define stub
 endef
 
 .DEFAULT_GOAL := help
-.PHONY: help lint synth cdc smoke sva-neg vplan sim sim-build regress cov formal formal-audit formal-signoff formal-figures bugs mcy results clean
+.PHONY: help lint synth cdc smoke sva-neg vplan sim sim-build regress cov formal formal-audit formal-signoff formal-figures bugs mcy-pick mcy results clean
 
 # Self-documenting help: lists every rule that has a "## " description, plus variables.
 help: ## [M0] List targets and variables
@@ -74,9 +84,10 @@ help: ## [M0] List targets and variables
 	@echo "Variables (current value):"
 	@echo "  RTL_DIR=$(RTL_DIR)"
 	@echo "  DUT_SRCS=$(DUT_SRCS)"
-	@echo "  SIM=$(SIM)  TEST=$(TEST)  SEED=$(SEED)  RATIO=$(RATIO)  J=$(J)  SVA=$(SVA) (0: UVM build without assertions)"
+	@echo "  SIM=$(SIM)  TEST=$(TEST)  SEED=$(SEED)  RATIO=$(RATIO)  J=$(J)  SVA=$(SVA) (0: UVM build without assertions)  MCY=$(MCY) (1: mutated-netlist build)"
 	@echo "  TASK=$(TASK) (bmc|prove|cover|pdr|audit_a0N|prove_noinv|pdr_noinv)  EXPECT=pass|fail|nopass|any  TIMEOUT=<s>"
-	@echo "  ASIZE/DSIZE: sim 4/8, formal+mcy 3/4 unless set; FORMAL_SIZES=\"$(FORMAL_SIZES)\" for formal-signoff"
+	@echo "  ASIZE/DSIZE: sim 4/8, formal 3/4, mcy 2/4 unless set; FORMAL_SIZES=\"$(FORMAL_SIZES)\" for formal-signoff"
+	@echo "  MCY_SIZE=$(MCY_SIZE) MCY_SEED=$(MCY_SEED) MCY_SLOTS=$(MCY_SLOTS) (mcy: mutations, seed, concurrent runs)"
 	@echo "  OUT=$(OUT)"
 	@echo "  OSS_CAD_SUITE=$(OSS_CAD_SUITE)"
 
@@ -85,7 +96,7 @@ help: ## [M0] List targets and variables
 VLT_GUARD  := -Werror-USERERROR
 # Variables for the printed repro line: sizes, plus any RTL or OUT override given on the command
 # line (an RTL variant built into its own OUT must rerun there, not over the default runs).
-REPRO_VARS  = ASIZE=$(ASIZE) DSIZE=$(DSIZE)$(if $(filter command line,$(origin RTL_DIR)), RTL_DIR=$(RTL_DIR))$(if $(filter command line,$(origin DUT_SRCS)), DUT_SRCS='$(DUT_SRCS)')$(if $(filter command line,$(origin OUT)), OUT=$(OUT))$(if $(filter command line,$(origin SVA)), SVA=$(SVA))
+REPRO_VARS  = ASIZE=$(ASIZE) DSIZE=$(DSIZE)$(if $(filter command line,$(origin RTL_DIR)), RTL_DIR=$(RTL_DIR))$(if $(filter command line,$(origin DUT_SRCS)), DUT_SRCS='$(DUT_SRCS)')$(if $(filter command line,$(origin OUT)), OUT=$(OUT))$(if $(filter command line,$(origin SVA)), SVA=$(SVA))$(if $(filter 1,$(MCY)), MCY=1)
 # Illegal sizes the RTL guards must reject (spec §2), as ASIZE:DSIZE:<parameter whose guard fires>.
 # lint checks them in Verilator, synth in Yosys; each must fail with that guard's own message.
 GUARD_CASES = 1:4:ASIZE 4:0:DSIZE
@@ -222,7 +233,7 @@ TB_INCDIRS  = $(addprefix $(TB_DIR)/,agents/wr agents/rd env seq tests)
 TB_DEPS     = $(shell find $(TB_DIR) $(COMMON)/uvm -name '*.sv' -o -name '*.svh') $(COMMON)/sim/$(SIM).mk
 # One build per simulator, size, assertion setting and RTL source list, so M8/M9 builds of
 # patched RTL coexist.
-BUILD_TAG   = $(SIM)_a$(ASIZE)_d$(DSIZE)$(if $(filter 0,$(SVA)),_nosva)_$(shell echo '$(DUT_SRCS)' | md5sum | cut -c1-8)
+BUILD_TAG   = $(SIM)_a$(ASIZE)_d$(DSIZE)$(if $(filter 0,$(SVA)),_nosva)$(if $(filter 1,$(MCY)),_mcy)_$(shell echo '$(DUT_SRCS)' | md5sum | cut -c1-8)
 PLUSARGS   ?=
 # Code coverage (line, branch, toggle) is for the design only: no UVM, testbench, common TB or
 # property code. Cover statements in the excluded property files still count (toolchain T14).
@@ -234,12 +245,12 @@ RUN        ?= $(TEST)
 # Everything the simulator layer needs to build the testbench (shared by sim and sim-build).
 # Assertions are always on (M6, SO-2): the RTL is built with ASYNC_FIFO_PROPS and tb_top holds the
 # e2e checker; assertions and cover statements are on by default in this Verilator (toolchain T14).
-SIM_BUILD_ARGS = TOP=tb_top SRCS="$(TB_PRE) $(DUT_SRCS) $(E2E_SRC) $(CONC_SRC) $(TB_DIR)/top/tb_top.sv" \
+SIM_BUILD_ARGS = TOP=tb_top SRCS="$(TB_PRE) $(if $(filter 1,$(MCY)),$(MCY_VLT)) $(DUT_SRCS) $(E2E_SRC) $(CONC_SRC) $(TB_DIR)/top/tb_top.sv" \
 	  INCDIRS="$(TB_INCDIRS) $(PROPS_DIR)" \
-	  DEFINES="FIFO_ASIZE=$(ASIZE) FIFO_DSIZE=$(DSIZE) ASYNC_FIFO_PROPS" \
+	  DEFINES="FIFO_ASIZE=$(ASIZE) FIFO_DSIZE=$(DSIZE) ASYNC_FIFO_PROPS$(if $(filter 1,$(MCY)), MCY)" \
 	  DEPS="$(TB_DEPS) $(DUT_SRCS) $(PROPS_SVH) $(E2E_SRC) $(CONC_SRC)" \
 	  BUILD_DIR=$(OUT)/build/$(BUILD_TAG) J=$(J) UVM_HOME=$(UVM_HOME) COV_EXCLUDE="$(COV_EXCLUDE)" \
-	  ASSERT=$(if $(filter 0,$(SVA)),0,1)
+	  ASSERT=$(if $(filter 0,$(SVA)),0,1) $(if $(filter 1,$(MCY)),COV_TYPES=user)
 
 # One UVM test at one seed: build once per configuration, run in out/.../run/<RUN>_<seed>/,
 # judge the log, print the reproduction command. Delegates to common/sim/<SIM>.mk.
@@ -269,9 +280,11 @@ REGRESS_REPRO = make regress SIM=$(SIM) $(REPRO_VARS)$(if $(N), N=$(N))$(if $(TE
 # the target's exit status stays the regression's. The formal sign-off (M7) is added when its
 # JSON exists; the test runs in the shell because make expands a whole recipe before running it,
 # so $(wildcard) would miss a file the same recipe has just written (formal-signoff).
-# Only the real RTL with assertions may rewrite the committed status page: a regression of patched
-# RTL (RTL_DIR/DUT_SRCS on the command line) or of an SVA=0 build skips it.
-REAL_RTL     = $(if $(filter command line,$(origin RTL_DIR) $(origin DUT_SRCS) $(origin SVA)),,1)
+# Only the sign-off configuration may rewrite the committed status page: the real RTL with
+# assertions at the sign-off size 4/8 in the default OUT. A regression of patched RTL
+# (RTL_DIR/DUT_SRCS on the command line), of an SVA=0 build, at another size (M9 runs ASIZE=2) or
+# into another OUT skips it.
+REAL_RTL     = $(if $(filter command line,$(origin RTL_DIR) $(origin DUT_SRCS) $(origin SVA) $(origin OUT)),,$(if $(filter 4:8,$(ASIZE):$(DSIZE)),1))
 VPLAN_STATUS = $(VPLAN_CHK) --annotate --cov $(OUT)/cov/functional.json --results $(OUT)/regress/results.json \
                `test -f $(OUT)/formal/signoff.json && echo --formal $(OUT)/formal/signoff.json`
 regress: ## [M5] Parallel regression from regress/tests.toml: [N=seeds] [TESTS="id ..."] [RECHECK=k]
@@ -363,9 +376,43 @@ bugs: ## [M8] Planted-bug matrix -> docs/bug_matrix.md [BUGS="base B03"] [METHOD
 	  --sim-vars "ASIZE=$(ASIZE) DSIZE=$(DSIZE)" $(if $(BUGS),--only $(BUGS)) $(if $(METHODS),--methods $(METHODS)) \
 	  $(if $(filter 1,$(REPORT_ONLY)),--report-only) --repro '$(BUGS_REPRO)'
 
-# Mutation testing: how many automatic RTL mutations the checks detect (report Q-2).
-mcy: ## [M9] MCY mutation coverage
-	$(call stub,M9,cd $(OUT)/mcy && mcy init && mcy run -j$(J) && mcy status)
+# ---- Mutation testing (M9, report Q-2; DEC-014): how many automatic RTL mutations the checks
+# detect. mcy/ holds the MCY template (config.mcy), the block settings (flow.toml), the miter and the
+# formal harness, the simulation run list (sim_runs.toml) and the dispositions (triage.toml).
+MCY_SIZE        ?= 300
+MCY_SEED        ?= 1
+MCY_SLOTS       ?= $(shell echo $$(( $(J) > 3 ? $(J) - 2 : 1 )))
+MCY_RESUME      ?= 0
+MCY_REPORT_ONLY ?= 0
+MCY_BASE         = $(OUT)/mcy_base
+# MCY_PROBE=<name> MCY_PROBE_VARS='SVA=0': instead of a run, re-simulate a finished project's
+# mutants with those make variables and compare (e.g. what the scoreboard alone detects).
+MCY_PROBE       ?=
+MCY_PROBE_VARS  ?=
+MCY_REPRO        = make mcy MCY_SIZE=$(MCY_SIZE) MCY_SEED=$(MCY_SEED) $(REPRO_VARS)$(if $(MCY_PROBE), MCY_PROBE=$(MCY_PROBE) MCY_PROBE_VARS='$(MCY_PROBE_VARS)')
+# Only the real RTL at the planned size, seed and mutation count rewrites docs/mutation_report.md.
+MCY_DOC          = $(if $(filter command line,$(origin RTL_DIR) $(origin DUT_SRCS) $(origin OUT)),,$(if $(filter 2:4:300:1,$(ASIZE):$(DSIZE):$(MCY_SIZE):$(MCY_SEED)),--doc))
+
+# The simulation runs every mutant gets (DEC-014): a regression of the real RTL at the MCY size into
+# $(MCY_BASE) (all tests.toml entries; N= changes the seed count), then cov_subset.py keeps the
+# fewest runs that hit every coverage point the regression hit, at least one per entry. Writes
+# mcy/sim_runs.toml (committed); the logs in $(MCY_BASE) are the baseline `make mcy` compares with.
+mcy-pick: ## [M9] Regression at the MCY size, then the coverage-preserving run subset -> mcy/sim_runs.toml [N=]
+	@if [ -n "$(filter command line,$(origin RTL_DIR) $(origin DUT_SRCS))" ]; then \
+	  echo "mcy-pick: the run subset is picked on the real RTL only (no RTL_DIR/DUT_SRCS)" >&2; exit 2; fi
+	@$(MAKE) --no-print-directory regress ASIZE=$(ASIZE) DSIZE=$(DSIZE) OUT=$(MCY_BASE) $(if $(N),N=$(N))
+	python3 $(COMMON)/scripts/cov_subset.py --regress $(MCY_BASE)/regress --out $(IP_ROOT)/mcy/sim_runs.toml \
+	  --repro 'make mcy-pick ASIZE=$(ASIZE) DSIZE=$(DSIZE)$(if $(N), N=$(N))'
+
+# The MCY run (common/scripts/mcy_run.py): project under $(OUT)/mcy/, gate on the original design,
+# mcy init + run, report (and docs/mutation_report.md for the planned configuration). MCY_RESUME=1
+# continues an interrupted run; MCY_REPORT_ONLY=1 rebuilds the report (after editing triage.toml).
+mcy: ## [M9] MCY: gate, mutants through sim/eq/formal, report [MCY_SIZE=300 MCY_SEED=1 MCY_RESUME=1 MCY_REPORT_ONLY=1]
+	$(FORMAL_ONE)python3 $(COMMON)/scripts/mcy_run.py --ip-root $(IP_ROOT) --config $(IP_ROOT)/mcy/config.mcy \
+	  --flow-cfg $(IP_ROOT)/mcy/flow.toml --dut $(DUT_SRCS) --asize $(ASIZE) --dsize $(DSIZE) \
+	  --size $(MCY_SIZE) --seed $(MCY_SEED) --out $(OUT) -j $(J) --slots $(MCY_SLOTS) $(MCY_DOC) \
+	  $(if $(filter 1,$(MCY_RESUME)),--resume) $(if $(filter 1,$(MCY_REPORT_ONLY)),--report-only) \
+	  $(if $(MCY_PROBE),--probe $(MCY_PROBE) --probe-vars '$(MCY_PROBE_VARS)') --repro "$(MCY_REPRO)"
 
 # Collects every summary under out/ into the reviewer-facing results page.
 results: ## [M10] Build docs/results.md from out/

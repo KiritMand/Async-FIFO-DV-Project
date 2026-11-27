@@ -1,0 +1,16 @@
+# triage.toml — dispositions of the MCY mutants that a method missed (M9, plan step 5; DEC-014).
+# Read by common/scripts/mcy_run.py, which writes them into the report and fails the run while a
+# mutant tagged UNCOVERED, FMONLY, SIMONLY, EQGAP, EQTIMEOUT or FMTIMEOUT has none.
+# Mutation ids depend on the seed, the size and the design (ASIZE = 2, DSIZE = 4), so each entry
+# names its run. Keys per [[disposition]]:
+#   seed, size  the run (default seed 1, size 300: the planned run behind docs/mutation_report.md)
+#   id          MCY mutation id in that run
+#   mutation    the report's short form ("<mode> <signal>[bit] at <cell>.<port>[bit]"); must match,
+#               or the entry is reported as stale
+#   class       stimulus-gap | checker-gap | property-gap | benign | inconclusive
+#   note        the explanation: what the mutant does, why the method misses it, the evidence
+#   was, fixed  (optional) for a mutant an MCY-driven improvement now catches: the old tags and
+#               the change that fixed it
+#
+# Seed 1, size 300 (2026-11-27): no entries needed. Every one of the 299 non-equivalent mutants
+# was detected by simulation and by formal (docs/mutation_report.md).

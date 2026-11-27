@@ -1,0 +1,33 @@
+# test_eq.sby — MCY equivalence check for one mutant (M9). A template: common/scripts/mcy_task.py
+# fills in the at-sign placeholders (MUTSEL, ASIZE, DSIZE, TIMEOUT; FILES = absolute paths of the
+# batch's mutated.il, miter.sv and the e2e checker) and runs it in the MCY task directory.
+# PASS = no input sequence makes the mutant's ports differ, unbounded (ABC PDR proves it);
+# FAIL = a counterexample trace where they differ. DEC-014: PDR, not BMC (BMC of this miter
+# needed 92 s for step 18 and more than 5 min for step 19).
+
+# Unbounded proof with free clocks (multiclock on, A04); TIMEOUT is a possible MCY result.
+[options]
+mode prove
+multiclock on
+timeout @TIMEOUT@
+
+# ABC's PDR finds its own invariants (two copies equal on reachable states).
+[engines]
+abc pdr
+
+# Read the miter, the checker (its asserts and covers removed: environment only) and the
+# mutated netlist; set sizes and the mutant; combine the two copies (fmcombine) and flatten.
+[script]
+read -formal miter.sv
+read -formal async_fifo_e2e_props.sv
+read_rtlil mutated.il
+chparam -set ASIZE @ASIZE@ -set DSIZE @DSIZE@ -set MUTSEL @MUTSEL@ miter
+prep -top miter
+chformal -assert -cover -remove *async_fifo_e2e_props*
+fmcombine miter gold gate
+flatten
+opt -fast
+
+# Sources (copied into the job's src/).
+[files]
+@FILES@

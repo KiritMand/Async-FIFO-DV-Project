@@ -1,6 +1,7 @@
 // tb_top.sv — top module of the async FIFO UVM testbench: one clock/reset generator per domain,
 // the two FIFO interfaces, the DUT, and run_test() (test chosen with +UVM_TESTNAME=).
 // +trace writes waves.vcd in the run directory (VCD: this host has no FST support, toolchain.md).
+// `define MCY (M9, `make mcy`): the DUT is a mutated netlist with a mutsel port (+mutsel=<n>).
 
 module tb_top;
   import uvm_pkg::*;
@@ -15,12 +16,29 @@ module tb_top;
   fifo_wr_if wr_if (.wclk(wclk_if.clk), .wrst_n(wclk_if.rst_n));
   fifo_rd_if rd_if (.rclk(rclk_if.clk), .rrst_n(rclk_if.rst_n));
 
+`ifdef MCY
+  // Mutation testing (M9): the DUT is MCY's mutated netlist, written by Yosys at fixed sizes (no
+  // parameters, toolchain T20) with an 8-bit mutsel input. +mutsel=<n> activates mutation n of the
+  // batch; 0 (default) is the original design. No white-box properties exist in the netlist.
+  logic [7:0] mutsel;
+  initial begin
+    mutsel = 8'd0;
+    void'($value$plusargs("mutsel=%d", mutsel));
+    $display("MCY mutsel=%0d", mutsel);
+  end
+  async_fifo dut (
+    .mutsel(mutsel),
+    .wclk  (wclk_if.clk), .wrst_n(wclk_if.rst_n), .winc(wr_if.winc), .wdata(wr_if.wdata), .wfull(wr_if.wfull),
+    .rclk  (rclk_if.clk), .rrst_n(rclk_if.rst_n), .rinc(rd_if.rinc), .rdata(rd_if.rdata), .rempty(rd_if.rempty)
+  );
+`else
   // Device under test. The sim flow builds it with ASYNC_FIFO_PROPS, so its white-box properties
   // (rtl/async_fifo_props.svh) run inside it (M6).
   async_fifo #(.DSIZE(DSIZE), .ASIZE(ASIZE)) dut (
     .wclk  (wclk_if.clk), .wrst_n(wclk_if.rst_n), .winc(wr_if.winc), .wdata(wr_if.wdata), .wfull(wr_if.wfull),
     .rclk  (rclk_if.clk), .rrst_n(rclk_if.rst_n), .rinc(rd_if.rinc), .rdata(rd_if.rdata), .rempty(rd_if.rempty)
   );
+`endif
 
   // End-to-end property checker on the same port nets (sva/async_fifo_e2e_props.sv, M6). Its
   // asm_ checks hold the testbench to the formal assumptions; its counts are unused here.

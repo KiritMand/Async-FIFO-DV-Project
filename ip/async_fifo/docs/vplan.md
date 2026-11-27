@@ -1,6 +1,6 @@
 # async_fifo — Verification plan
 
-**Version** 0.6 · **Date** 2026-11-25 · **Status** DRAFT: owner decisions applied (feature-table
+**Version** 0.7 · **Date** 2026-11-27 · **Status** DRAFT: owner decisions applied (feature-table
 edits, power-up-only resets, N = 200); full text awaiting owner review ·
 **Spec** [`spec.md`](spec.md) v1.1 · **RTL** `rtl/async_fifo.sv`, tag `rtl-v1`
 
@@ -389,6 +389,14 @@ failing label is listed. The A02 run is k-induction with the invariants.
   F07), and its asynchronous assertion changes registers between clock edges (F09b, F11, F14
   gclk).
 
+**Reuse in M9 (MCY, DEC-014 D1).** The equivalence miter (`mcy/test_eq/`) and the formal mutant
+test (`mcy/test_fm/`) take their environment from the e2e checker, so they rest on exactly the
+active rows above: A01, A02 and A05, with free clocks (A04) and A03 off. The miter strips the
+checker's asserts and covers (`chformal`) and keeps only these assumptions. No row was added.
+With A01 alone, two identical copies of the design already differ: in the counterexample the
+write reset is re-asserted mid-run and released between clock edges (outside A05 and A02), and
+the copies' different uninitialized memory becomes visible (toolchain T21 note).
+
 ---
 
 ## 6. Planted-bug plan (→ M8)
@@ -512,3 +520,4 @@ From spec §12, plus limits of the methods used:
 | 0.4 | 2026-11-24 | Claude | M6: properties coded. §1.2 adds the concurrent twins and the negative tests. §4: A01's simulation form is "at the first rising edge of either clock" (owner, DEC-010; the old wording fails on a legal testbench whose `rrst_n` is released before `wclk` first rises); "As built (M6)" notes (sampling, true fill, the F08 window and reset guards, history, assumption checks, failure messages, negative tests). §5 A01 Simulation cell matches. No intent weakened, no bin, check or assumption added or removed. |
 | 0.5 | 2026-11-24 | Claude | M7: formal. §1.2 formal row (harness files, evidence). §4 "As built (M7)" (harness inside the DUT, A02 and A03 in the formal step model, named history registers instead of `$past` on design clocks, F02/F03 tracking, 25 induction invariants, SBY tasks). §5: A03 not adopted (DEC-011 D2); audit results recorded; A02 found unnecessary in formal (retirement is the owner's decision). §7 SO-3 evidence. No intent weakened; no bin, check or assumption added or removed. |
 | 0.6 | 2026-11-25 | Claude | M8: §6 "As built (M8)": patches, predictions and explanations in `bugs/`, results in `docs/bug_matrix.md`, and where the results differ from the Expected catch column (B08 structural only, B09 also e2e, B11 also by UVM test checks, B12 a stimulus gap). §8 records the one CDC waiver of the new structural check (`make cdc`; owner confirmation requested). No feature, bin, check, property or assumption changed. |
+| 0.7 | 2026-11-27 | Claude | M9: §5 "Reuse in M9": the MCY equivalence miter and formal mutant test take their environment from the e2e checker, i.e. exactly the active ledger rows A01, A02, A05 (A04 free clocks, A03 off; DEC-014 D1). Q-2 evidence in `docs/mutation_report.md`. No feature, bin, check, property or assumption changed. |

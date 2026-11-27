@@ -1,0 +1,4 @@
+`verilator_config
+// T20 (M9): Yosys's write_verilog emits `x[2:1] ^ x` for the gray conversion (a 2-bit operand
+// in a 3-bit XOR): legal Verilog, warned as WIDTHEXPAND. Switch that rule off for the netlist only.
+lint_off -rule WIDTHEXPAND -file "*mutated.v"

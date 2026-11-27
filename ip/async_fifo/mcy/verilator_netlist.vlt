@@ -1,0 +1,12 @@
+`verilator_config
+// Waiver file for MCY's mutated netlist only (M9, `make ... MCY=1`). A comment must not begin with
+// the tool's name: that is read as a pragma (toolchain.md, M1).
+// Yosys's write_verilog emits the gray conversion as `x[2:1] ^ x` (a narrower operand in an XOR):
+// legal Verilog, warned as WIDTHEXPAND, which the UVM build treats as fatal (toolchain T20).
+// The waivers name the netlist file, so the RTL and the testbench keep the full warning set.
+lint_off -rule WIDTHEXPAND -file "*mutated.v"
+// A cnot mutation feeds one bit of a vector from another bit of the same vector (e.g. wbin[1]
+// from wbin[0]): a cycle at vector granularity only, reported as UNOPTFLAT, which Verilator
+// documents as a performance warning (results stay correct). The MCY gate checks that the netlist
+// with every mutation inactive gives logs identical to the RTL's (toolchain, "MCY and Verilator").
+lint_off -rule UNOPTFLAT -file "*mutated.v"

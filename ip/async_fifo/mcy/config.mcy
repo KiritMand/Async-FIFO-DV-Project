@@ -1,0 +1,86 @@
+# config.mcy — MCY mutation-coverage project for async_fifo (M9; vplan §7 Q-2; DEC-014).
+# A template: `make mcy` (common/scripts/mcy_run.py) copies it into out/async_fifo/mcy/<run>/,
+# fills in the at-sign placeholders (sizes, the scripts directory), may replace the size and seed
+# lines (MCY_SIZE=, MCY_SEED=), copies the DUT there as async_fifo.sv and writes flow.json for the
+# test runner. Never run from this directory. MCY rejects a blank line before the first section.
+#
+# Mutations: how many, a fixed seed (without it every `mcy init` draws a different set and the
+# score moves; toolchain T5), and the tags the [logic] section may set. No `select`: the whole
+# design is mutated (DEC-014 D4); the report groups mutants by RTL statement instead.
+[options]
+size 300
+seed 1
+tags COVERED UNCOVERED NOCHANGE EQGAP FMONLY SIMONLY EQTIMEOUT FMTIMEOUT
+
+# The design as mutated: the RTL alone, without ASYNC_FIFO_PROPS, so properties are never mutated;
+# at the MCY size (vplan §1: ASIZE = 2, DSIZE = 4). memory_map turns the memory into flops, a write
+# decoder and a read mux (DEC-014): mutations of a $mem_v2 cell's unused read-port controls (e.g.
+# RD_SRST of the asynchronous read port) have no circuit meaning, and Yosys's Verilog writer
+# asserts on them (toolchain, "MCY and memories"), so every mutation now hits real logic.
+[script]
+read_verilog -sv async_fifo.sv
+chparam -set ASIZE @ASIZE@ -set DSIZE @DSIZE@ async_fifo
+prep -top async_fifo
+memory_map
+opt_clean
+
+# Stored in the MCY database with the mutations.
+[files]
+async_fifo.sv
+
+# Classification (DEC-014 D2: every mutant gets all three tests; simulation is asked first, so its
+# batches fill up). test_eq PASS = proven equivalent (no depth bound); FAIL = a difference exists.
+# A TIMEOUT proves nothing: an equivalence timeout is treated as a difference, a formal-test
+# timeout as not detected, so both make the scores lower bounds, and each is tagged.
+[logic]
+sim_ok = result("test_sim") == "PASS"
+eq = result("test_eq")
+fm = result("test_fm")
+fm_ok = fm != "FAIL"
+if fm == "TIMEOUT":
+    tag("FMTIMEOUT")
+if eq == "PASS":
+    if sim_ok and fm_ok:
+        tag("NOCHANGE")
+    else:
+        tag("EQGAP")
+else:
+    if eq == "TIMEOUT":
+        tag("EQTIMEOUT")
+    if sim_ok and fm_ok:
+        tag("UNCOVERED")
+    else:
+        tag("COVERED")
+        if sim_ok:
+            tag("FMONLY")
+        if fm_ok:
+            tag("SIMONLY")
+
+# Counts and the three scores, each COVERED-by-that-method / (COVERED + UNCOVERED).
+[report]
+n = tags("COVERED") + tags("UNCOVERED")
+for t in ("COVERED", "UNCOVERED", "NOCHANGE", "EQGAP", "FMONLY", "SIMONLY", "EQTIMEOUT", "FMTIMEOUT"):
+    print("%-10s %d" % (t, tags(t)))
+if n:
+    print("Mutation score, simulation: %.2f%%" % (100.0 * (tags("COVERED") - tags("FMONLY")) / n))
+    print("Mutation score, formal:     %.2f%%" % (100.0 * (tags("COVERED") - tags("SIMONLY")) / n))
+    print("Mutation score, combined:   %.2f%%" % (100.0 * tags("COVERED") / n))
+
+# Simulation: the UVM testbench on the batch's netlist (one build per batch of up to 32 mutants),
+# the runs of mcy/sim_runs.toml per mutant; scoreboard, test checks and the e2e checker.
+# Every test command first clears the Python variables MCY's own bundled interpreter exports
+# (PYTHONHOME points at Python 3.11; the system python3 then cannot start: toolchain.md).
+[test test_sim]
+maxbatchsize 32
+expect PASS FAIL
+run env -u PYTHONHOME -u PYTHONEXECUTABLE -u PYTHONNOUSERSITE python3 @COMMON@/scripts/mcy_task.py sim --flow $PRJDIR/flow.json
+
+# Equivalence: the miter of mcy/test_eq/, ABC PDR.
+[test test_eq]
+expect PASS FAIL TIMEOUT
+run env -u PYTHONHOME -u PYTHONEXECUTABLE -u PYTHONNOUSERSITE python3 @COMMON@/scripts/mcy_task.py formal --flow $PRJDIR/flow.json --test test_eq
+
+# Formal: the mutant with the e2e checker (mcy/test_fm/), ABC PDR.
+[test test_fm]
+expect PASS FAIL TIMEOUT
+run env -u PYTHONHOME -u PYTHONEXECUTABLE -u PYTHONNOUSERSITE python3 @COMMON@/scripts/mcy_task.py formal --flow $PRJDIR/flow.json --test test_fm

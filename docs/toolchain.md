@@ -85,6 +85,8 @@ Run on 2026-11-21 with the pinned versions above: all PASS, 765 s total (T1 211 
 | T17 | *(M7, 2026-11-24)* async-reset release in the same formal step as a rising clock edge (`multiclock on`): an RTL-style counter (reset outside the data path) and a checker-style counter (accept term includes the reset) under three release rules: SAME (only with a clock rise, the vplan's A02 wording), LATE (only without one), free | SBY + Yosys + yices | **PASS** | The coincident release with `inc` high is reachable (`cov_edge_inc`, step 1) and the flop **still acts as in reset at that edge**, as in simulation (`ast_release_holds`); the two counters agree under all three rules (bmc 16), LATE also covers and proves. So the vplan's A02 formal wording (DEC-011 D3) needs no change, and a free release did not break this toy (the A02 audit in M7 checks the FIFO). Config finding: a `.sby` line prefix naming several tasks (`a b: ...`) is rejected (`Unused option: a`); use tags on the `[tasks]` lines. |
 | T18 | *(M7, 2026-11-24)* harness structure: `(* gclk *)` in two modules of one design, `$rose`/`$changed` of a design clock in a gclk block, `abc pdr` with an assumption under `multiclock on`, a hierarchical reference into an instance | SBY + Yosys + yices / abc | **PASS, with a finding** | Two gclk declarations work (the submodule's gclk assertion fails by its label `t18_top.u.ast_sub_on_edge` under BREAK); k-induction and `abc pdr` prove with the assumption, and `abc pdr` fails without it, so pdr honors assumptions. **A hierarchical reference is not resolved: Yosys declares an implicit, undriven wire named `\u.c` (warnings only) that the solver treats as free**, so an assertion through it fails and an assumption through it would silently constrain nothing. `` `default_nettype none `` makes it an error. Export signals through ports instead; `make formal` fails on "implicitly declared" and "has no driver" warnings. |
 | T19 | *(M8, 2026-11-25)* SBY `mode cover` on a design whose assertion fails: a counter, an assertion broken at cnt = 3, one cover before and one after that point | SBY + Yosys + yices | **PASS** | Cover mode **ignores assertions** (neither checked nor assumed; the `cover_assert` option is off by default): verdict PASS, both covers reached (the later one at step 6, past the failure), the assertion is not named in the log. So a `cover` run reports pure reachability, also on a broken design: the M8 bug matrix reads lost covers from it, and the M7 "22/22 covers" was never evidence that assertions hold (that is `prove`'s job). |
+| T20 | *(M9, 2026-11-26)* Verilator on the netlist an MCY test script gets: Yosys `prep` at ASIZE=2/DSIZE=4, `mutate -ctrl mutsel 8 1 <mutation>`, `write_verilog -norename` (as MCY's `create_mutated.sh` does), driven by a small testbench | Yosys + Verilator `--timing` | **PASS, with a caveat** | The netlist has an `input [7:0] mutsel` port and **no parameters** (sizes are fixed by `chparam`), so `tb_top` instantiates it without overrides (`ifdef MCY`). Verilator's default warnings, fatal in the UVM flow, **reject it on WIDTHEXPAND** only: Yosys writes the gray conversion as `x[2:1] ^ x`. A `.vlt` with `lint_off -rule WIDTHEXPAND -file "*mutated.v"` fixes it without touching the RTL or testbench warning set (`ip/async_fifo/mcy/verilator_netlist.vlt`). mutsel=0 returns every word intact; mutsel=1 (a `wdata` bit inverted) corrupts all 4. |
+| T21 | *(M9, 2026-11-26)* the MCY equivalence harness `ip/async_fifo/mcy/test_eq/` as is: `chformal` scoped to the checker module, `fmcombine` on the two-clock netlist, ABC PDR under `multiclock on` | Yosys + SBY + ABC | **PASS** | `chformal -assert -cover -remove *async_fifo_e2e_props*` matches the derived `$paramod...` module and leaves exactly its 5 `asm_` cells plus the miter's 3 asserts (Yosys 0.71 keeps immediate properties as **`$check` cells** until lowered; `select t:$assert` finds none, chformal acts on `$check` by flavor). `fmcombine` accepts async-reset flops and a `$mem_v2`. PDR proves two identical copies equal with **no depth bound** (13 s) and finds the T20 mutation as an `mcy_eq_rdata` difference. Without the ledger assumptions two identical copies *differ* (a mid-run reset re-assertion exposes uninitialized memory): the miter needs A01/A02/A05 (DEC-014 D1). |
 
 ## Findings that affect later modules
 
@@ -167,6 +169,39 @@ Run on 2026-11-21 with the pinned versions above: all PASS, 765 s total (T1 211 
   two runs of the same example scored 94.25% and 93.43%. M9's `config.mcy` must set `seed` in
   `[options]` and the report must quote it. ~0.5 s per mutant at `-j4` with Icarus — a UVM
   testbench will need `maxbatchsize`/`mutsel` batching (plan R8).
+- **Formal engines for MCY (M9, DEC-014).** Plain BMC of the two-copy miter at ASIZE=2 grows
+  exponentially: steps 15/16/17/18 took 6/15/33/92 s and step 19 more than 5 min, so the planned
+  depth 64 (two pointer wraps) is out of reach. ABC PDR on the same miter: identical copies proven
+  equal in 13 s, unbounded; on a 49-mutant sample 48 differences found in 1.3–10.6 s (mean 3.0 s)
+  and 1 equivalence proven in 26 s. For the formal test (mutant + e2e checker, no `inv_`) PDR found
+  the failing property in 1.2–17.5 s where `bmc_bugs`-style BMC (`--keep-going`, depth 20) took
+  4–170 s; the unmutated netlist is proven in 358 s (M7 `pdr_noinv`: 303 s). Both MCY formal tests
+  use PDR, so NOCHANGE is a proof and the formal column has no depth bound.
+- **MCY test scripts (M9).** MCY passes a batch as `input.txt` lines `<idx> <mutate command>`;
+  `idx` is the mutsel value inside the batch's netlist (not the database id, which is in
+  `$MUTATIONS`); the script answers in `output.txt`. A result outside the test's `expect` list
+  stops `mcy run`. Test commands inherit the environment of MCY's bundled interpreter
+  (`tabbypy3` exports `PYTHONHOME`, `PYTHONEXECUTABLE`, `PYTHONNOUSERSITE`), so a system `python3`
+  started from a test dies with "Failed to import encodings module"; config.mcy's `run` lines
+  start with `env -u PYTHONHOME -u PYTHONEXECUTABLE -u PYTHONNOUSERSITE`.
+  Comment lines (`#`) are skipped in every config.mcy section, `[logic]` included,
+  but a **blank line before the first section** is a syntax error (`mcy init`: "Syntax error in
+  line N").
+- **MCY and memories (M9, T20).** After `prep` the FIFO memory is one `$mem_v2` cell, and
+  `mutate -list` also mutates its unused read-port controls. For the asynchronous read port,
+  `mutate ... -cell mem -port RD_SRST` makes `write_verilog` abort with ``Assert `port.srst ==
+  State::S0' failed`` (kernel/mem.cc:493), for const0 as well as const1. Seen in the M9 pilot: the
+  first batch contained one. Such a mutation has no circuit meaning, so config.mcy runs
+  `memory_map; opt_clean` before mutating: storage flops, write decoder and read mux become
+  ordinary cells. memory_map's cells carry no `src` attribute; the report places them by cell name
+  (flow.toml `[report.cells]`).
+- **MCY and Verilator (M9).** A batch netlist holds up to 32 mutations at once. A `cnot` mutation
+  drives one bit of a vector from another bit of the same vector (pilot: `wbin[1]` from
+  `wbin[0]`), which Verilator reports as `UNOPTFLAT` (circular logic at vector granularity; the
+  bits are acyclic), fatal under default warnings. It is a performance warning, so
+  `mcy/verilator_netlist.vlt` waives it for `*mutated.v` only, beside WIDTHEXPAND (T20). Evidence
+  that behavior is unchanged: the MCY gate's logs with every mutation inactive must equal the
+  RTL's, line for line.
 - **SBY config comments.** `#` comment lines are accepted in every `.sby` section, including
   `[script]` (verified by T4 after DEC-004 commenting).
 - **Parameter guard (M1+, T7).** Every Verilator command that builds the RTL (lint, smoke, UVM,

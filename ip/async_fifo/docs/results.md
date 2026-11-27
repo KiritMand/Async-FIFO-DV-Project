@@ -59,3 +59,42 @@ per formal step:
   lag F08 bounds), and `rempty` rises at fill 0.
 - `docs/figures/formal_pointer_wrap_a2.svg`: `cov_F13_two_wraps`. Both pointers wrap twice
   (4·DEPTH reads), with the gray codes alongside.
+
+---
+
+## Mutation coverage (M9, MCY, report Q-2)
+
+MCY with Yosys `mutate` on the RTL at ASIZE = 2, DSIZE = 4 (vplan §1), properties never mutated,
+memory mapped to flops and logic before mutating (DEC-014). Every mutant gets three tests:
+simulation (the UVM testbench on the mutated netlist, the 20 runs of `mcy/sim_runs.toml` picked
+by coverage from a 1,600-run ASIZE=2 regression), equivalence (a two-copy miter under the ledger
+assumptions A01/A02/A05, ABC PDR: "no change" is a proof) and formal (the mutant with the e2e
+checker's spec properties, ABC PDR, no depth bound). Before each run a gate checks the harness
+on the original design: 20/20 simulation logs identical to the RTL's, the miter proven equal,
+the formal test passing. Score = detected / (COVERED + UNCOVERED). Full page, with every mutant
+by RTL statement and the checks that caught them: `docs/mutation_report.md`.
+
+| Mutation set | Mutants | Non-equivalent | Simulation | Formal | Combined | UNCOVERED | EQGAP | Wall clock |
+|---|---|---|---|---|---|---|---|---|
+| **seed 1** (planned) | 300 | 299 | **100%** | **100%** | **100%** | 0 | 0 | 48 min |
+| seed 2 | 300 | 294 | **100%** | **100%** | **100%** | 0 | 0 | 115 min (shared the host with the probe) |
+
+- **NOCHANGE** (proven equivalent, excluded from the score): seed 1 only the `none` mutation;
+  seed 2 also five mutants on the memory write path's no-write branch, which the write enable
+  masks.
+- **Scoreboard-only probe** (seed 1, `SVA=0`: every assertion removed): the scoreboard and test
+  checks alone detect 298 of 299. Mutant 292 (the `rempty` flop's reset tied off) differs only
+  while the read side is in reset, which only F01's reset-value assertion observes.
+- **What caught them first** (seed 1): in simulation an e2e assertion fired first for 228
+  mutants (the flag-safety pair F06/F07 alone for 116) and the scoreboard for 71, although the
+  probe shows the scoreboard would have caught 298 by itself: assertions fire earlier, closer
+  to the cause. Every mutant fell within the first five runs of the subset (smoke 242,
+  fill_to_full 40, thrash_full 12, thrash_empty 5). In formal, F14 (show-ahead data stable) was
+  the first property PDR reported for 126 mutants.
+- **No survivor, so no MCY-driven fix** (DEC-015, owner). Limits: one size (ASIZE = 2); the formal
+  test has the e2e properties only (white-box ones do not exist in a mutated netlist); bit-level
+  mutations (constant, invert, swap with another bit) cannot express a wrong synchronizer
+  structure such as B08, which M8's structural CDC check covers.
+
+Reproduce: `make mcy-pick` (baseline regression and run subset), `make mcy` (seed 1, writes
+`docs/mutation_report.md`), `make mcy MCY_SEED=2`, `make mcy MCY_PROBE=sb MCY_PROBE_VARS=SVA=0`.

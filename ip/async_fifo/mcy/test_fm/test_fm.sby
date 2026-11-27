@@ -1,0 +1,30 @@
+# test_fm.sby — MCY formal test for one mutant (M9): does any end-to-end property fail? A template:
+# common/scripts/mcy_task.py fills in the at-sign placeholders (MUTSEL, ASIZE, DSIZE, TIMEOUT;
+# FILES = absolute paths of the batch's mutated.il, fm_top.sv and the e2e checker) and runs it in
+# the MCY task directory.
+# PASS = every spec property holds, unbounded (ABC PDR); FAIL = a counterexample; TIMEOUT = no
+# answer in time (counted as not detected). DEC-014: PDR, not BMC (bmc_bugs-style BMC is bounded
+# at 20 steps and took 4–170 s per detected mutant; PDR 2–8 s).
+
+# Unbounded proof with free clocks (multiclock on, A04).
+[options]
+mode prove
+multiclock on
+timeout @TIMEOUT@
+
+# ABC's PDR (finds its own invariants; the white-box ones do not exist in the netlist).
+[engines]
+abc pdr
+
+# Read the harness, the checker without its inv_ proof aids, and the mutated netlist; set sizes
+# and the mutant.
+[script]
+read -formal fm_top.sv
+read -formal -DFORMAL_NO_INV async_fifo_e2e_props.sv
+read_rtlil mutated.il
+chparam -set ASIZE @ASIZE@ -set DSIZE @DSIZE@ -set MUTSEL @MUTSEL@ fm_top
+prep -top fm_top
+
+# Sources (copied into the job's src/).
+[files]
+@FILES@
