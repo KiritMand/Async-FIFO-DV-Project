@@ -44,7 +44,8 @@ class TestIsInput(unittest.TestCase):
             self.assertTrue(provenance.is_input(p), p)
         for p in ("README.md", "ip/a/docs/results.md", "docs/progress.md", "ip/a/docs/figures/f.svg",
                   ".github/workflows/ci.yml", "tools_smoke/T1/t.sv", "common/scripts/make_results.py",
-                  "ip/a/constraints/a.xdc", "common/scripts/tests/test_x.py"):
+                  "ip/a/constraints/a.xdc", "common/scripts/tests/test_x.py", "ip/a/bugs/bugs.toml",
+                  "ip/a/mcy/triage.toml"):
             self.assertFalse(provenance.is_input(p), p)
 
 

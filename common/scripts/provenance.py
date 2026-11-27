@@ -10,8 +10,12 @@ nothing was recorded (results made before M10).
 
 Flow inputs are every file of the repository except prose and generated documentation (*.md,
 except the vplan, which the checkers read), figures and sign-off snapshots, CI and editor files,
-the toolchain experiments, the example constraints, and the results generator itself. The rule
-is deliberately broad: a change to any script, testbench or Makefile makes every result STALE.
+the toolchain experiments, the example constraints, the results generator itself, and the two
+files of after-the-run text: bugs/bugs.toml (predictions are fixed before a run, but its
+explanations and findings are written after; bug_matrix.py's own fingerprint covers the
+[matrix] settings that change a run) and mcy/triage.toml (dispositions of surviving mutants).
+The rule is deliberately broad: a change to any script, testbench or Makefile makes every
+result STALE.
 
 Python >= 3.11, standard library only.
 """
@@ -27,7 +31,7 @@ from pathlib import Path
 # Paths that never change a result (prefixes, exact names, suffixes). Everything else is an input.
 NOT_INPUT_PREFIXES = (".github/", ".claude/", "tools_smoke/", "common/scripts/tests/")
 NOT_INPUT_NAMES = {".gitignore", "common/scripts/make_results.py", "common/scripts/provenance.py"}
-NOT_INPUT_SUFFIXES = (".xdc",)
+NOT_INPUT_SUFFIXES = (".xdc", "/bugs/bugs.toml", "/mcy/triage.toml")
 NOT_INPUT_PARTS = ("/docs/figures/", "/docs/signoff/")
 
 
