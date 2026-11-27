@@ -29,6 +29,8 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+import provenance
+
 # Log lines SBY writes (one regex each); labels are the last component of the property path.
 DONE_RE = re.compile(r"DONE \((\w+), rc=(\d+)\)")
 FAILED_RE = re.compile(r"summary:\s+failed assertion (\S+) at")
@@ -235,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--summary", type=Path, help="write a Markdown table of all runs here")
     ap.add_argument("--repro", default="", help="reproduction command to print")
     args = ap.parse_args(argv)
+    prov = provenance.record(args.sby.resolve().parent)   # the tree and tools these runs use
     try:
         runs = [parse_run(s) for s in args.run]
         srcs = {k: Path(v) for k, v in (s.split("=", 1) for s in args.src)}
@@ -247,7 +250,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.summary:
         args.summary.parent.mkdir(parents=True, exist_ok=True)
         args.summary.write_text(summary_md(runs, args.dsize, args.repro), encoding="utf-8")
-        meta = {"dsize": args.dsize, "generated": time.strftime("%Y-%m-%dT%H:%M:%S"), "repro": args.repro}
+        meta = {"dsize": args.dsize, "generated": time.strftime("%Y-%m-%dT%H:%M:%S"), "repro": args.repro,
+                "provenance": prov}
         data = {"meta": meta, "runs": [{**asdict(r), "ok": r.ok()} for r in runs]}
         args.summary.with_suffix(".json").write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
         print(f"formal_run: summary {args.summary} (+ .json)")

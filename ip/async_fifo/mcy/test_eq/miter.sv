@@ -3,9 +3,8 @@
 // design) and gate with mutsel = MUTSEL. test_eq.sby proves the outputs equal with ABC PDR (no
 // depth bound) or finds an input sequence where they differ.
 // Environment (DEC-014 D1): the e2e checker on the shared inputs, whose asserts and covers the
-// .sby script removes (chformal), so only its active ledger assumptions remain: A01 both resets
-// asserted at power-up, A02 each reset released on its own clock, A05 never reset again; free
-// clocks (A04). No other assumption: inputs are otherwise free, as in the formal sign-off.
+// .sby script removes (chformal), so only its formal assumptions remain: A01 both resets
+// asserted at power-up, A05 never reset again; free clocks (A04). A02 is not assumed (DEC-012). No other assumption: inputs are otherwise free, as in the formal sign-off.
 // Compared: wfull and rempty at every step (reset included, F01), rdata whenever gold is not
 // empty (show-ahead data is a don't-care while empty, spec R3).
 // Labels use the mcy_ prefix: they are harness checks, not vplan properties.

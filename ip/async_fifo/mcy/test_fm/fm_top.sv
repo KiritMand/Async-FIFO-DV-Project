@@ -2,7 +2,7 @@
 // with the e2e checker on its ports. The netlist has no white-box properties (they live in
 // rtl/async_fifo_props.svh, which MCY never reads, so properties are never mutated), so this is
 // the formal flow with the end-to-end property set only: F01–F08, F12, F14 and the formal-only
-// F02/F03 tracked-word and F14 gclk properties, under the ledger assumptions A01, A02, A05.
+// F02/F03 tracked-word and F14 gclk properties, under the formal assumptions A01, A05 (DEC-012).
 // test_fm.sby reads the checker with FORMAL_NO_INV: its inv_ proof aids are not spec properties.
 
 `default_nettype none

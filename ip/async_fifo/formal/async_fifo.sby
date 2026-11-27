@@ -13,8 +13,8 @@
 # assertions it has already checked, so the invariants prune bmc too: 48 s to depth 40 at ASIZE=3
 # with them, more than 5 min for step 21 alone at ASIZE=2 without). Ledger audit (vplan §5): audit_a01/audit_a05
 # drop that assumption and run bmc on the spec properties only (no invariants, --keep-going lists
-# every failing label); audit_a02 drops A02 and runs k-induction with the invariants (a pass means
-# A02 is unnecessary for every property). prove_noinv/pdr_noinv remove the invariants: are they
+# every failing label). A02 is not assumed at all since DEC-012 (the M7 audit_a02 task proved
+# every property without it), so it has no audit task. prove_noinv/pdr_noinv remove the invariants: are they
 # needed, and does PDR find its own? Words after a task name are tags; a line prefix naming
 # several tasks is rejected (T17), so shared lines use tags: std = standard read, smt = plain
 # smtbmc, kind = k-induction, pdr_eng = ABC PDR, audit = bmc audit, noinv = no invariants,
@@ -30,7 +30,6 @@ cover std smt
 pdr std pdr_eng
 audit_a01 audit
 audit_a05 audit
-audit_a02 smt kind
 prove_noinv noinv smt kind
 pdr_noinv noinv pdr_eng
 
@@ -67,7 +66,6 @@ pdr_eng: abc pdr
 std: read -formal -DASYNC_FIFO_PROPS async_fifo_e2e_props.sv async_fifo.sv
 audit_a01: read -formal -DASYNC_FIFO_PROPS -DFORMAL_NO_INV -DFORMAL_DROP_A01 async_fifo_e2e_props.sv async_fifo.sv
 audit_a05: read -formal -DASYNC_FIFO_PROPS -DFORMAL_NO_INV -DFORMAL_DROP_A05 async_fifo_e2e_props.sv async_fifo.sv
-audit_a02: read -formal -DASYNC_FIFO_PROPS -DFORMAL_DROP_A02 async_fifo_e2e_props.sv async_fifo.sv
 noinv: read -formal -DASYNC_FIFO_PROPS -DFORMAL_NO_INV async_fifo_e2e_props.sv async_fifo.sv
 chparam -set ASIZE 3 -set DSIZE 4 async_fifo
 prep -top async_fifo

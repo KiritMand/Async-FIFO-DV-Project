@@ -40,7 +40,8 @@ built M6). That is the spec's coincident-edge rule.
 **Resets.**
 - **A01.** Both resets are 0 in the initial state (`initial assume`).
 - **A02.** A reset rises only in a step where its own clock rises (`always @(posedge gclk)` with
-  `$rose`). The worry was that at such a step an async-reset flop might load its D input as if
+  `$rose`). Assumed in M7; since DEC-012 (M10) it is off, behind `FORMAL_A02`, because the audit
+  below proved every property without it. The worry was that at such a step an async-reset flop might load its D input as if
   the reset were already gone, which simulation never does. T17 shows it does not: the flop still
   acts as in reset at that edge, and an RTL-style counter (reset outside the data path) and a
   checker-style counter (reset inside the accept term) never disagree.
@@ -114,7 +115,8 @@ counterexample asked for only one more. Reading it needed a trace viewer, so
   With A02 dropped, k-induction still passes: **A02 is not needed for any property**. Physically
   it is still required, because an asynchronous release near a clock edge is a recovery/removal
   violation and can go metastable, which neither RTL simulation nor this formal model represents
-  (plan R11). Whether the formal assumption is retired is the owner's decision (see vplan §5).
+  (plan R11). The owner chose to drop it from formal and keep it as a requirement checked in
+  simulation (DEC-012 option 1, M10), so the sign-off proof now rests on A01 and A05 only.
 - **Planted bug (preview of M8).** B05 (`rempty_next` from the current instead of the next read
   pointer) fails `bmc` on `ast_F14_rdata_stable_gclk`. The FIFO claims data one edge early, and a
   write lands on the exposed entry between `rclk` edges. `prove` no longer passes. Lesson for M8:
@@ -133,7 +135,7 @@ proof closed, as the plan required.
 | Topic | ZipCPU | This project |
 |---|---|---|
 | Clocks | Each clock is the MSB of a counter that adds an `anyconst` step each formal step: fixed rates, jittery edges | Free clocks (A04): any interleaving, including coincident edges, long gaps and changing ratios. Strictly more general; fine for safety properties. |
-| Resets | May start released (`initial assume(wrst_n == rrst_n)`); may be re-asserted later, both together; released on the own clock | Power-up only (A01, A05, DEC-007); release on the own clock (A02), which the audit shows is not needed |
+| Resets | May start released (`initial assume(wrst_n == rrst_n)`); may be re-asserted later, both together; released on the own clock | Power-up only (A01, A05, DEC-007); released at any formal step (A02 off since DEC-012: the audit showed it is not needed) |
 | Inputs | Assumed stable except at the own clock's rising edge (our A03) | Unconstrained; A03 not needed |
 | Design | Cummings' modules merged into one file, for induction | Already one module since M1 (plan R7) |
 | Flag safety | `f_fill` bounds plus "lookahead" implications (fill = full−1 ⇒ `wfull_next` or no write or `wfull`) | Safety against the synchronized pointer (`inv_wfull_safe`, chains): no lookahead terms |

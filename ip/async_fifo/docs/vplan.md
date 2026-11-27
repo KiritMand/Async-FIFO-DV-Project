@@ -1,6 +1,6 @@
 # async_fifo — Verification plan
 
-**Version** 0.7 · **Date** 2026-11-27 · **Status** DRAFT: owner decisions applied (feature-table
+**Version** 0.8 · **Date** 2026-11-27 · **Status** DRAFT: owner decisions applied (feature-table
 edits, power-up-only resets, N = 200); full text awaiting owner review ·
 **Spec** [`spec.md`](spec.md) v1.1 · **RTL** `rtl/async_fifo.sv`, tag `rtl-v1`
 
@@ -359,11 +359,15 @@ an assertion on the testbench (§4, `asm_`). Adding or changing a row needs the 
 | ID | Assumption | Why it is realistic | Formal | Simulation | Status |
 |---|---|---|---|---|---|
 | A01 | Both resets are asserted (0) together at time 0 (power-up). | One power-on reset source feeds both reset synchronizers (spec §8). | `asm_A01_resets_low_at_start` (initial state) | `asm_A01_resets_low_at_start`: both resets are 0 at the first rising edge of either clock (DEC-010) | active |
-| A02 | Each reset is released synchronously to its own clock: `wrst_n` rises only with a rising `wclk` edge, `rrst_n` only with a rising `rclk` edge. | Reset synchronizers (asynchronous assert, synchronous release) are the integrator's job (spec §8). | `asm_A02_wrst_release_on_wclk`<br>`asm_A02_rrst_release_on_rclk` (M7 audit: every property is proven without it; see below) | `asm_A02_wrst_release_on_wclk`<br>`asm_A02_rrst_release_on_rclk`: each rising reset edge must fall in the time step of a rising edge of its clock | active |
+| A02 | Each reset is released synchronously to its own clock: `wrst_n` rises only with a rising `wclk` edge, `rrst_n` only with a rising `rclk` edge. | Reset synchronizers (asynchronous assert, synchronous release) are the integrator's job (spec §8). | Not assumed (DEC-012 option 1): the M7 audit proved every property without it. The formal form of `asm_A02_wrst_release_on_wclk`<br>`asm_A02_rrst_release_on_rclk` stays behind the define `FORMAL_A02`, off | `asm_A02_wrst_release_on_wclk`<br>`asm_A02_rrst_release_on_rclk`: each rising reset edge must fall in the time step of a rising edge of its clock | active |
 | A03 | `winc`/`wdata` change only in the formal step right after a rising `wclk` edge; `rinc` likewise for `rclk`. | Inputs come from flops on their own clock (spec §3). The DUT samples them only at rising edges and has no combinational path from input to output, so changes between edges are invisible to it. The assumption only shrinks traces. | `asm_A03_w_inputs_after_wclk`<br>`asm_A03_r_inputs_after_rclk` (not adopted, DEC-011 D2: behind the define `FORMAL_A03`, off; M7 did not need it) | `asm_A03_w_inputs_after_wclk`<br>`asm_A03_r_inputs_after_rclk`: inputs change only in the time step of a rising edge of their own clock (requires drivers that drive at that edge, M3) | optional |
 | A04 | Clocks are unconstrained: any interleaving of rising edges, including coincident edges and arbitrarily long gaps. | Strictly more general than any real pair of clocks, and enough for safety properties (no fairness needed). | n/a: no constraint; `wclk` and `rclk` are free inputs sampled every formal step. The F15 covers show the freedom is real. | n/a: simulated clocks (1:4 to 4:1) are a subset | modeling |
 | A05 | No reset after power-up: once `wrst_n` (`rrst_n`) has risen, it stays 1. | Owner decision DEC-007: mid-operation resets are out of scope (spec §8, v1.1). | `asm_A05_wrst_stays_released`<br>`asm_A05_rrst_stays_released` | `asm_A05_wrst_stays_released`<br>`asm_A05_rrst_stays_released` | active |
 | A06 | Inputs are known (0 or 1) whenever their side is out of reset, and they meet setup and hold on their own clock. | X on inputs and timing violations are out of scope (spec §3, §12). | n/a: formal is two-valued and samples inputs exactly at the edge | `asm_A06_w_inputs_known`<br>`asm_A06_r_inputs_known` (Verilator is two-state, so these can only fire in a four-state simulator) | active |
+
+A02 stays **active** as a requirement on the integrator (reset synchronizers, spec §8) and is
+checked in every simulation, but formal no longer assumes it (DEC-012, option 1, owner
+2026-11-27): the active formal environment is A01 and A05, with free clocks (A04).
 
 **Assumption audit (M7).** Drop each active formal assumption in turn and rerun. Expected
 results:
@@ -383,7 +387,9 @@ failing label is listed. The A02 run is k-induction with the invariants.
   tolerates any release timing in the formal model. Following the rule above, A02 is a candidate
   for retirement from formal, but it stays a physical requirement: an asynchronous release near a
   clock edge is a recovery/removal violation that can go metastable, which neither RTL simulation
-  nor formal models (plan R11). **Owner decision pending**; until then A02 stays active.
+  nor formal models (plan R11). **Owner decision (DEC-012, option 1):** formal no longer assumes
+  A02; the simulation checks and the requirement stay. The `audit_a02` task is gone, because
+  `prove` itself now runs without A02.
 - **A05 dropped: fails, as expected.** 11 assertions fail: F02, F03, F06, F07, F09(b), F11, F12
   and F14. A one-sided reset makes the checker's counts and the DUT's pointers disagree (F06,
   F07), and its asynchronous assertion changes registers between clock edges (F09b, F11, F14
@@ -391,7 +397,9 @@ failing label is listed. The A02 run is k-induction with the invariants.
 
 **Reuse in M9 (MCY, DEC-014 D1).** The equivalence miter (`mcy/test_eq/`) and the formal mutant
 test (`mcy/test_fm/`) take their environment from the e2e checker, so they rest on exactly the
-active rows above: A01, A02 and A05, with free clocks (A04) and A03 off. The miter strips the
+formal environment above: A01 and A05 since DEC-012 (A01, A02 and A05 in M9), with free clocks
+(A04) and A02, A03 off. Without A02, PDR still proves two identical copies equal (28 s, against
+13 s with it; checked at M10 before the rerun). The miter strips the
 checker's asserts and covers (`chformal`) and keeps only these assumptions. No row was added.
 With A01 alone, two identical copies of the design already differ: in the counterexample the
 write reset is re-asserted mid-run and released between clock edges (outside A05 and A02), and
@@ -486,8 +494,8 @@ specifies: rule R1 (no logic on a crossing) on the memory read path, `mem` (writ
 - **Reason:** the data is qualified by the synchronized pointers. An entry becomes visible only
   after its write pointer has crossed, and it stays unchanged while it is on `rdata` (F14). No
   `rclk` flop ever samples a changing value.
-- **Approval:** the owner approved doing step 5 on 2026-11-25. Confirmation of the waiver itself
-  is requested at the M8 close-out.
+- **Approval:** the owner approved doing step 5 on 2026-11-25 and confirmed the waiver itself on
+  2026-11-27 (DEC-016 D3).
 
 ---
 
@@ -521,3 +529,4 @@ From spec §12, plus limits of the methods used:
 | 0.5 | 2026-11-24 | Claude | M7: formal. §1.2 formal row (harness files, evidence). §4 "As built (M7)" (harness inside the DUT, A02 and A03 in the formal step model, named history registers instead of `$past` on design clocks, F02/F03 tracking, 25 induction invariants, SBY tasks). §5: A03 not adopted (DEC-011 D2); audit results recorded; A02 found unnecessary in formal (retirement is the owner's decision). §7 SO-3 evidence. No intent weakened; no bin, check or assumption added or removed. |
 | 0.6 | 2026-11-25 | Claude | M8: §6 "As built (M8)": patches, predictions and explanations in `bugs/`, results in `docs/bug_matrix.md`, and where the results differ from the Expected catch column (B08 structural only, B09 also e2e, B11 also by UVM test checks, B12 a stimulus gap). §8 records the one CDC waiver of the new structural check (`make cdc`; owner confirmation requested). No feature, bin, check, property or assumption changed. |
 | 0.7 | 2026-11-27 | Claude | M9: §5 "Reuse in M9": the MCY equivalence miter and formal mutant test take their environment from the e2e checker, i.e. exactly the active ledger rows A01, A02, A05 (A04 free clocks, A03 off; DEC-014 D1). Q-2 evidence in `docs/mutation_report.md`. No feature, bin, check, property or assumption changed. |
+| 0.8 | 2026-11-27 | Claude | M10: DEC-012 option 1 (owner): A02 is no longer a formal assumption (its formal form stays behind `FORMAL_A02`, off); the requirement and its simulation checks stay; the `audit_a02` task is removed. Removing an assumption only widens what formal explores. §8: CDC waiver confirmed by the owner (DEC-016 D3). No feature, bin, check or property changed. |

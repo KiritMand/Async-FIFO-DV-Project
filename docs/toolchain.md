@@ -54,7 +54,7 @@ and update this file.
 |---|---|
 | Questa / Xcelium / VCS (commercial) | no access |
 | Questa–Altera FPGA Starter | not installed; fallback only if Verilator fails T1–T3 (DEC-001) |
-| Vivado XSim | not installed |
+| Vivado (XSim, synthesis, implementation) | not installed: the example XDC (M10) is not validated by a tool |
 
 ## Feature × tool results (tools_smoke/)
 
@@ -247,3 +247,24 @@ Run on 2026-11-21 with the pinned versions above: all PASS, 765 s total (T1 211 
   and Verilator's solver is also uneven inside a range (T10).
 - **Quiet runs.** `+verilator+quiet` suppresses Verilator's end-of-run report (wall time, speed),
   the only part of a run log that differs between two identical runs.
+
+## CI and implementation (M10)
+
+- **GitHub Actions: `YosysHQ/setup-oss-cad-suite@v4`.** Its `action.yml` (read through the GitHub
+  API on 2026-11-27) takes `version` ("Version range or exact version of OSS CAD Suite to use"),
+  `github-token` (avoids the public API rate limit) and `python-override` (default false). The
+  README shows `version: '2021-05-28'`, so a release date pins the suite; CI uses
+  `version: "2026-11-21"`, the same build as the host. The action adds the suite's `bin/` to
+  `PATH`; `common/tools.mk` then falls back to `PATH` because `~/tools/oss-cad-suite` does not
+  exist on the runner. The release asset is 754 MB, downloaded once per job (no cache).
+- **UVM in CI.** `git fetch --depth 1` of commit `1eab10a` from `chipsalliance/uvm-verilator` into
+  `~/tools/uvm-2020-3.2`, the default `UVM_HOME` location, so no override is needed.
+- **Vivado constraints are not validated.** `ip/async_fifo/constraints/async_fifo.xdc` was written
+  from AMD UG903 ("CDC Synchronizers and ASYNC_REG Property", "About Bus Skew Constraints",
+  "Syntax of the set_bus_skew Command") and UG949 ("Constraints on Individual CDC Paths"), read
+  2026-11-27, but Vivado is not installed (see "Not available"), so no tool has parsed it.
+- **Provenance of results (`common/scripts/provenance.py`).** Each flow that saves a result
+  records the git commit, the blob hashes of its uncommitted inputs and the tool versions
+  (`verilator --version`, `yosys -V`, `sby --version`, `yices --version`, the suite's `VERSION`
+  file `20261121`, and the UVM checkout's commit). `make results STRICT=1` compares them with the
+  working tree.

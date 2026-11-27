@@ -13,8 +13,9 @@
 // the formal-only properties (vplan Runs = formal), checker-only induction invariants (inv_
 // labels), and f_ output ports that export checker state to the white-box invariants in
 // rtl/async_fifo_props.svh, which instantiates this checker inside the DUT for formal.
-// Formal switches (defines): FORMAL_A03 adopts optional assumption A03 (off, DEC-011 D2);
-// FORMAL_DROP_A01/A02/A05 drop one assumption for the ledger audit (vplan §5).
+// Formal switches (defines): FORMAL_A02 / FORMAL_A03 add the formal form of A02 / A03 (both off:
+// DEC-012 option 1, DEC-011 D2); FORMAL_DROP_A01/A05 drop one assumption for the ledger audit
+// (vplan §5).
 
 `default_nettype none
 
@@ -292,11 +293,12 @@ module async_fifo_e2e_props #(
   initial asm_A01_resets_low_at_start: assume (!wrst_n && !rrst_n);
 `endif
 
-  // A02: a reset rises only in a step where its own clock rises (as a reset synchronizer does;
-  // toolchain T17: the flops still act as in reset at that edge, as in simulation).
-  // A05: once released, a reset stays released (DEC-007).
+  // A02 (off by default, DEC-012 option 1: the M7 audit proved every property without it, so
+  // the proof does not rely on it): a reset rises only in a step where its own clock rises, as a
+  // reset synchronizer does (toolchain T17). It stays a physical requirement, checked in
+  // simulation. A05: once released, a reset stays released (DEC-007).
   always @(posedge f_gclk) if (f_pv) begin
-`ifndef FORMAL_DROP_A02
+`ifdef FORMAL_A02
     if ($rose(wrst_n)) asm_A02_wrst_release_on_wclk: assume ($rose(wclk));
     if ($rose(rrst_n)) asm_A02_rrst_release_on_rclk: assume ($rose(rclk));
 `endif

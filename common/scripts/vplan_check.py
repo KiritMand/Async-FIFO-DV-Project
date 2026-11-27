@@ -617,6 +617,31 @@ def pct(hit: int, total: int) -> str:
     return "100%" if hit == total else f"{min(99.9, 100.0 * hit / total):.1f}%"
 
 
+# SO-1 numbers for the results page (make_results.py), counted the way --annotate counts them:
+# planned bins and hits over the plan's items (excluded ones left out), the fewest hits of any
+# planned bin, planned items missing from the database, the plan's stated total, and the
+# simulation cover properties of the plan with their hits.
+def so1_counts(vp: Vplan, mdl: Model, cov: dict) -> dict:
+    groups, covers = cov["groups"], cov.get("covers") or {}
+    excluded = {t for r in vp.tables["exclusions"] for t in tokens(r["Item"])}
+    bins, missing = {}, []
+    for item in mdl.cov_items:
+        if item in excluded:
+            continue
+        group, point = item.split(".")
+        it = groups.get(group, {}).get("items", {}).get(point)
+        if it is None:
+            missing.append(item)
+        else:
+            bins.update({f"{item}.{b}": c for b, c in it["bins"].items()})
+    sim_covers = [p for p, r in mdl.props.items()
+                  if p.startswith("cov_") and r["Runs"] in ("sim", "both") and p not in excluded]
+    return {"bins": len(bins), "hit": sum(c > 0 for c in bins.values()), "thinnest": min(bins.values(), default=0),
+            "missing": missing, "stated": stated_bins(vp), "covers": len(sim_covers),
+            "covers_hit": sum(covers.get(c, 0) > 0 for c in sim_covers),
+            "covers_thinnest": min((covers.get(c, 0) for c in sim_covers), default=0)}
+
+
 # SO-3 (vplan §7) from formal_run.py's sign-off JSON: k-induction passes at ASIZE 2 and 3, every
 # formal cover of the plan (Runs = formal or both, not excluded) is reached in each cover run,
 # every run met its expectation (pdr, audit, cross-checks). Returns (SO-3 text, per-feature

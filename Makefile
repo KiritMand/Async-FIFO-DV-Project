@@ -5,7 +5,7 @@
 IP      ?= async_fifo
 IPS     := $(notdir $(wildcard ip/*))
 TARGETS := help lint synth cdc smoke sva-neg vplan sim sim-build regress cov formal formal-audit formal-signoff \
-           formal-figures bugs mcy-pick mcy results clean
+           formal-figures bugs mcy-pick mcy results evidence clean
 
 .DEFAULT_GOAL := help
 .PHONY: $(TARGETS) clean-all tools-smoke
