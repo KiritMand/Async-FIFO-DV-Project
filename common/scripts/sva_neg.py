@@ -38,6 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import simlog  # noqa: E402
 import vplan_check  # noqa: E402
+import provenance  # noqa: E402
 
 # Bench output lines (see the module docstring).
 CASE_RE = re.compile(r"^SVA_NEG case (\w+)\s*$")
@@ -218,6 +219,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--config", default="", help="configuration shown on the page, e.g. 'ASIZE=4 DSIZE=8'")
     ap.add_argument("--twins", type=Path, help="source file of concurrent twins (cast_ labels) to check")
     args = ap.parse_args(argv)
+    prov = provenance.record(args.vplan.resolve().parent)   # the tree and tools this run uses
     try:
         twins = TWIN_RE.findall(args.twins.read_text()) if args.twins else []
         rules = simlog.load_rules(args.patterns)
@@ -267,7 +269,7 @@ def main(argv: list[str] | None = None) -> int:
         {"clean": {"ok": not clean_reasons, "reasons": clean_reasons}, "nocases": nocases,
          "cases": [asdict(c) for c in results],
          "twins": [{"twin": t, "case": imm, "fires": ok} for t, imm, ok in twin_rows],
-         "problems": problems}, indent=1))
+         "problems": problems, "provenance": prov}, indent=1))
     (args.out / "summary.md").write_text(md)
     if args.doc:
         args.doc.write_text(md)

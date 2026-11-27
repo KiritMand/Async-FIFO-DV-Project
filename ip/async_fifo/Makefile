@@ -55,7 +55,7 @@ J         ?= $(shell nproc 2>/dev/null || echo 4)
 
 # ---- Parameters: per-flow defaults (sim ASIZE=4 DSIZE=8; formal ASIZE=3 DSIZE=4; MCY ASIZE=2 DSIZE=4).
 # Target-specific `?=` so a command-line ASIZE=/DSIZE= still wins.
-SIM_FLOWS    := lint synth cdc smoke sva-neg sim sim-build regress cov bugs
+SIM_FLOWS    := lint synth cdc smoke sva-neg sim sim-build regress cov bugs results
 FORMAL_FLOWS := formal formal-audit formal-signoff
 $(SIM_FLOWS):    ASIZE ?= 4
 $(SIM_FLOWS):    DSIZE ?= 8
@@ -74,7 +74,7 @@ define stub
 endef
 
 .DEFAULT_GOAL := help
-.PHONY: help lint synth cdc smoke sva-neg vplan sim sim-build regress cov formal formal-audit formal-signoff formal-figures bugs mcy-pick mcy results clean
+.PHONY: help lint synth cdc smoke sva-neg vplan sim sim-build regress cov formal formal-audit formal-signoff formal-figures bugs mcy-pick mcy results evidence clean
 
 # Self-documenting help: lists every rule that has a "## " description, plus variables.
 help: ## [M0] List targets and variables
@@ -319,10 +319,9 @@ formal: ## [M7] SymbiYosys: TASK=<bmc|prove|cover|pdr|...> ASIZE=<n> [EXPECT=pas
 	  --repro 'make formal TASK=$(TASK) EXPECT=$(EXPECT) $(REPRO_VARS)$(if $(TIMEOUT), TIMEOUT=$(TIMEOUT))$(if $(SBY_OPT), SBY_OPT="$(SBY_OPT)")'
 
 # Assumption audit (vplan §5): each task drops one active assumption. A01 and A05 must fail (bmc,
-# spec properties only, every failing label listed); A02 is recorded (k-induction without it: a
-# pass means it is unnecessary, and the ledger says so for the owner to decide).
-formal-audit: ## [M7] Drop each assumption in turn (A01, A05 must fail; A02 recorded) at ASIZE=<n>
-	$(FORMAL_ONE)$(FORMAL_RUN) --run audit_a01:$(ASIZE):fail audit_a02:$(ASIZE):any audit_a05:$(ASIZE):fail \
+# spec properties only, every failing label listed). A02 is not a formal assumption (DEC-012).
+formal-audit: ## [M7] Drop each assumption in turn (A01, A05 must fail) at ASIZE=<n>
+	$(FORMAL_ONE)$(FORMAL_RUN) --run audit_a01:$(ASIZE):fail audit_a05:$(ASIZE):fail \
 	  --summary $(OUT)/formal/audit_a$(ASIZE).md --repro 'make formal-audit $(REPRO_VARS)'
 
 # SO-3 sign-off set at every FORMAL_SIZES size: bmc, k-induction, cover, PDR; then the audit and
@@ -331,7 +330,7 @@ formal-audit: ## [M7] Drop each assumption in turn (A01, A05 must fail; A02 reco
 formal-signoff: ## [M7] SO-3: bmc/prove/cover/pdr at FORMAL_SIZES, audit + no-invariant checks -> signoff.md
 	$(FORMAL_ONE)$(FORMAL_RUN) \
 	  --run $(foreach a,$(FORMAL_SIZES),bmc:$(a) prove:$(a) cover:$(a) pdr:$(a)) \
-	        $(foreach a,$(FORMAL_SIZES),audit_a01:$(a):fail audit_a02:$(a):any audit_a05:$(a):fail prove_noinv:$(a):any pdr_noinv:$(a):any) \
+	        $(foreach a,$(FORMAL_SIZES),audit_a01:$(a):fail audit_a05:$(a):fail prove_noinv:$(a):any pdr_noinv:$(a):any) \
 	  --summary $(OUT)/formal/signoff.md \
 	  --repro 'make formal-signoff FORMAL_SIZES="$(FORMAL_SIZES)" $(REPRO_VARS)$(if $(TIMEOUT), TIMEOUT=$(TIMEOUT))'
 	@if [ -f $(OUT)/cov/functional.json ]; then $(VPLAN_STATUS); fi
@@ -414,9 +413,39 @@ mcy: ## [M9] MCY: gate, mutants through sim/eq/formal, report [MCY_SIZE=300 MCY_
 	  $(if $(filter 1,$(MCY_RESUME)),--resume) $(if $(filter 1,$(MCY_REPORT_ONLY)),--report-only) \
 	  $(if $(MCY_PROBE),--probe $(MCY_PROBE) --probe-vars '$(MCY_PROBE_VARS)') --repro "$(MCY_REPRO)"
 
-# Collects every summary under out/ into the reviewer-facing results page.
-results: ## [M10] Build docs/results.md from out/
-	$(call stub,M10,python3 $(COMMON)/scripts/make_results.py --ip $(IP))
+# ---- Results and release evidence (M10).
+# The reviewer-facing page: common/scripts/make_results.py reads only the results the flows saved
+# under $(OUT) and writes docs/results.md plus the same summary block into the README. STRICT=1
+# fails unless every section exists, meets its criterion and ran on today's flow inputs
+# (provenance.py); CHECK=1 only compares the README block with the page (no out/ needed; CI).
+# The page is written only from the default OUT, so a side run cannot overwrite it.
+RESULTS_MCY ?= a2_d4_n300_s1 a2_d4_n300_s2
+STRICT      ?= 0
+CHECK       ?= 0
+results: ## [M10] docs/results.md + README results block from the saved results [STRICT=1] [CHECK=1]
+	@if [ "$(CHECK)" != 1 ] && [ -n "$(filter command line,$(origin OUT))" ]; then \
+	  echo "results: the page is built from the default OUT only" >&2; exit 2; fi
+	python3 $(COMMON)/scripts/make_results.py --ip-root $(IP_ROOT) --readme $(REPO_ROOT)/README.md \
+	  $(if $(filter 1,$(CHECK)),--check,--out $(OUT) --sim-size a$(ASIZE)_d$(DSIZE) --mcy-sets $(RESULTS_MCY)) \
+	  $(if $(filter 1,$(STRICT)),--strict) --repro 'make results$(if $(filter 1,$(STRICT)), STRICT=1)$(if $(filter 1,$(CHECK)), CHECK=1)'
+
+# Release evidence (DEC-016 D1): every flow the results page reads, in order, on a committed tree.
+# mcy-pick goes first because it rewrites an input (mcy/sim_runs.toml), so every later flow sees
+# the same tree. A failing step does not stop the chain (each step is logged); the final
+# `make results STRICT=1` and the step table decide. About 7-9 h on an 8-core, 8 GB host.
+EVIDENCE_STEPS = "mcy-pick" "regress RECHECK=3" "sva-neg" "cdc" "formal-signoff TIMEOUT=1800" "formal-figures" \
+                 "bugs" "mcy" "mcy MCY_SEED=2" "mcy MCY_PROBE=sb MCY_PROBE_VARS=SVA=0" "results STRICT=1"
+EVIDENCE_DIR   = $(OUT)/evidence
+evidence: ## [M10] Rerun every flow behind docs/results.md, in order, then make results STRICT=1 (hours)
+	@mkdir -p $(EVIDENCE_DIR); rc=0; echo "# make evidence, started $$(date -Is)" > $(EVIDENCE_DIR)/steps.txt; \
+	for s in $(EVIDENCE_STEPS); do \
+	  log=$(EVIDENCE_DIR)/$$(echo "$$s" | tr ' =' '__').log; t0=$$(date +%s); \
+	  echo "+ make $$s   (log $$log)"; \
+	  if $(MAKE) --no-print-directory -C $(IP_ROOT) $$s > $$log 2>&1; then st=PASS; else st=FAIL; rc=1; fi; \
+	  line="$$st  $$(( $$(date +%s) - t0 )) s  make $$s"; echo "  $$line"; echo "$$line" >> $(EVIDENCE_DIR)/steps.txt; \
+	done; \
+	echo "evidence $$( [ $$rc = 0 ] && echo PASS || echo FAIL ): steps in $(EVIDENCE_DIR)/steps.txt   repro: make evidence"; \
+	exit $$rc
 
 # Deletes everything this block generated (all of it lives under OUT).
 clean: ## [M0] Remove this block's generated output

@@ -36,6 +36,8 @@ import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+import provenance
+
 # simlog.py (same directory) holds the log judge and the [CFG] line pattern.
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -441,7 +443,7 @@ def write_summary(meta: dict, runs: list[Run], cov_md: str, path: Path) -> None:
 def recheck(runs: list[Run], k: int, cwd: str, out_dir: Path, choice_seed: int) -> int:
     pick = random.Random(choice_seed).sample(runs, min(k, len(runs)))
     out_dir.mkdir(parents=True, exist_ok=True)
-    bad = 0
+    bad, rows = 0, []
     print(f"recheck: {len(pick)} random runs (choice seed {choice_seed})")
     for r in pick:
         log = Path(r.run_dir) / "sim.log"
@@ -450,7 +452,10 @@ def recheck(runs: list[Run], k: int, cwd: str, out_dir: Path, choice_seed: int) 
         subprocess.run(r.repro, shell=True, cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
         same = log.is_file() and log.read_bytes() == saved.read_bytes()
         bad += not same
+        rows.append({"repro": r.repro, "identical": same})
         print(f"  {'identical' if same else 'DIFFERENT'}: {r.repro}")
+    # Saved for the results page (make_results.py): which runs were rerun and whether they matched.
+    (out_dir / "recheck.json").write_text(json.dumps({"choice_seed": choice_seed, "runs": rows}, indent=1))
     return bad
 
 
@@ -505,6 +510,7 @@ def regress(args: argparse.Namespace) -> int:
         if rep.exists():
             shutil.rmtree(rep)
         (rep / "logs").mkdir(parents=True)
+        prov = provenance.record(Path(flow["dir"]))   # the tree and tools this regression runs on
         build = fill(flow["build"], sim=args.sim, vars=args.vars, out=out)
         print(f"+ (cd {flow['dir']} && {build})", flush=True)
         t0 = time.monotonic()
@@ -517,7 +523,7 @@ def regress(args: argparse.Namespace) -> int:
         print(f"regress: {len(runs)} runs ({len(entries)} entries) on {args.jobs} jobs", flush=True)
         run_all(runs, flow["dir"], rep / "logs", rules, args.jobs)
         meta = {"generated": now(), "sim": args.sim, "jobs": args.jobs, "wall_s": round(time.monotonic() - t0, 1),
-                "git": git_rev(flow["dir"]), "tests": str(args.tests), "repro": args.repro}
+                "git": git_rev(flow["dir"]), "tests": str(args.tests), "repro": args.repro, "provenance": prov}
         results.write_text(json.dumps({"meta": meta, "runs": [asdict(r) for r in runs]}, indent=1))
         write_junit(runs, rep / "junit.xml")
     # Coverage of the passing runs, then the summary (written even when the merge fails).

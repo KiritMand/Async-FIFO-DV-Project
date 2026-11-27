@@ -50,6 +50,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import bug_matrix  # noqa: E402
 import mcy_task  # noqa: E402
+import provenance  # noqa: E402
 
 PRIMARY = ("COVERED", "UNCOVERED", "NOCHANGE", "EQGAP")
 NEEDS_DISPOSITION = ("UNCOVERED", "FMONLY", "SIMONLY", "EQGAP", "EQTIMEOUT", "FMTIMEOUT")
@@ -394,7 +395,7 @@ def render(meta: dict, data: dict, sc: dict, probs: list[str], rel) -> str:
                      f"a mutant stops at its first failing run; run limit {meta['sim_timeout']} s, "
                      f"a timeout retried at 3x, then counted as a hang"],
         ["test_eq", "miter of the original and the mutant (`mcy/test_eq/`), environment = ledger assumptions "
-                    "A01, A02, A05 via the e2e checker's assumptions; ABC PDR: PASS is a proof (no depth bound)"],
+                    "A01, A05 via the e2e checker's assumptions (A02 off, DEC-012); ABC PDR: PASS is a proof (no depth bound)"],
         ["test_fm", "mutant + e2e checker, spec properties only (no `inv_`), ledger assumptions; ABC PDR "
                     "(no depth bound); the white-box properties do not exist in a mutated netlist"],
     ])
@@ -554,6 +555,7 @@ def probe(proj: Path, name: str, extra_vars: str, batch: int, slots_n: int, lock
     if pdir.exists():
         shutil.rmtree(pdir)
     pdir.mkdir(parents=True)
+    prov = provenance.record(proj.parent)   # the tree and tools this probe runs on
     flow = json.loads((proj / "flow.json").read_text())
     flow["sim"]["extra_vars"] = extra_vars
     flow["lock_dir"], flow["slots"], flow["details_dir"] = str(lock_dir), slots_n, str(pdir / "details")
@@ -597,7 +599,7 @@ def probe(proj: Path, name: str, extra_vars: str, batch: int, slots_n: int, lock
             rows.append({"id": m.mid, "mutation": m.cmd, "project": p, "probe": q, "class": key,
                          "probe_first_fail": m.detail.get("first_fail", {}).get("reasons", [])[:1]})
     (pdir / "probe.json").write_text(json.dumps({"name": name, "extra_vars": extra_vars, "counts": counts,
-                                                 "repro": repro, "mutants": rows}, indent=1))
+                                                 "repro": repro, "mutants": rows, "provenance": prov}, indent=1))
     lines = [f"# MCY probe `{name}` ({extra_vars}) of `{proj.name}`", "", f"Repro: `{repro}`", "",
              "| Class | Mutants |", "|---|---|"] + [f"| {k} | {v} |" for k, v in counts.items()]
     lines += ["", "Mutants the project's simulation caught but the probe did not:", ""]
@@ -656,6 +658,7 @@ def main(argv: list[str] | None = None) -> int:
     if not a.report_only:
         try:
             if not a.resume:
+                prov = provenance.record(a.ip_root)   # the tree and tools, before setup copies anything
                 flow = setup(a, block, proj)
                 if sh(["mcy", "init"], proj, proj / "mcy_init.log") != 0:
                     print(f"mcy_run FAIL: mcy init, see {proj / 'mcy_init.log'}", file=sys.stderr)
@@ -667,6 +670,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"gate: harness on the original design (mutsel = 0)", flush=True)
                 g = gate(proj, flow, block, a.out / block["sim"]["baseline"], batch=32)
                 meta["gate"] = g
+                meta["provenance"] = prov
                 meta_path.write_text(json.dumps(meta, indent=1))
                 if not all(v["ok"] for v in g.values()):
                     print(f"mcy_run FAIL: gate ({', '.join(k for k, v in g.items() if not v['ok'])}); details in "
@@ -674,6 +678,8 @@ def main(argv: list[str] | None = None) -> int:
                     return 1
             else:
                 meta = json.loads(meta_path.read_text()) if meta_path.is_file() else {}
+                # A resumed run records the tree again; the results page checks every record.
+                meta.setdefault("provenance_resumes", []).append(provenance.record(a.ip_root))
                 sh(["mcy", "reset"], proj, proj / "mcy_reset.log")
             start = time.monotonic()
             rc = run_mcy(proj, a.jobs, a.size)
@@ -704,6 +710,7 @@ def main(argv: list[str] | None = None) -> int:
     (proj / "report.md").write_text(page)
     summary = {"size": a.size, "seed": a.seed, "asize": a.asize, "dsize": a.dsize, **sc, "problems": probs,
                "finished": info["finished"], "repro": a.repro,
+               "provenance": meta.get("provenance"), "provenance_resumes": meta.get("provenance_resumes", []),
                "mutants": [{k: r[k] for k in ("id", "short", "line", "results", "tags")} for r in data["rows"]]}
     (proj / "summary.json").write_text(json.dumps(summary, indent=1))
     if a.doc:

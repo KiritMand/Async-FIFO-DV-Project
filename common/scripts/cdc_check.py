@@ -30,6 +30,8 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import provenance
+
 # Yosys flip-flop cell types and their clock / async-reset / data-input ports.
 FF_TYPES = {"$dff", "$dffe", "$adff", "$adffe", "$sdff", "$sdffe", "$sdffce", "$dffsr", "$dffsre", "$aldff", "$aldffe"}
 FF_DATA_PORTS = ("D", "EN", "SRST")
@@ -235,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", type=Path, required=True, help="work directory (netlist, report.json)")
     ap.add_argument("--repro", default="", help="reproduction command to print")
     args = ap.parse_args(argv)
+    prov = provenance.record(args.config.resolve().parent)   # the tree and tools this check uses
     try:
         with args.config.open("rb") as f:
             cfg = tomllib.load(f)
@@ -254,8 +257,8 @@ def main(argv: list[str] | None = None) -> int:
         if (w.get("rule"), w.get("dest"), w.get("source")) not in used:
             print(f"  warning: waiver {w.get('rule')} {w.get('source')} -> {w.get('dest')} matched nothing")
     nsync = len([n for n in notes if n.rule == "R4"])
-    (args.out / "report.json").write_text(json.dumps({"violations": [vars(v) for v in viol], "notes": [vars(n) for n in notes]},
-                                                     indent=1) + "\n", encoding="utf-8")
+    (args.out / "report.json").write_text(json.dumps({"violations": [vars(v) for v in viol], "notes": [vars(n) for n in notes],
+                                                      "provenance": prov}, indent=1) + "\n", encoding="utf-8")
     print(f"cdc {'PASS' if not open_v else 'FAIL'}: {len(open_v)} violations, {len(viol) - len(open_v)} waived, "
           f"{nsync} multi-bit synchronizers" + (f"   repro: {args.repro}" if args.repro else ""))
     return 0 if not open_v else 1

@@ -1,0 +1,164 @@
+# ci.yml — continuous integration for the async_fifo verification project (M10).
+# Every push and pull request: static checks and the directed smoke test, a short formal run,
+# and a UVM smoke regression. Nightly (and on demand): a 20-seed regression of every test and
+# the negative assertion tests. Tools are pinned to the same releases as the development host
+# (docs/toolchain.md): OSS CAD Suite 2026-11-21 and UVM 2020-3.2 at commit 1eab10a.
+
+name: CI
+
+# When to run: pushes to any branch, pull requests, a nightly schedule, and by hand.
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+# Read-only token; a newer push to the same branch cancels the older run.
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Lint, synthesis, structural CDC, the vplan checks with every script self-test, the README
+  # results block against docs/results.md, and the directed (non-UVM) smoke test.
+  checks:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # Sources, then the pinned OSS CAD Suite on PATH (common/tools.mk falls back to PATH).
+      - uses: actions/checkout@v5
+      - uses: YosysHQ/setup-oss-cad-suite@v4
+        with:
+          version: "2026-11-21"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      # Record the tool versions in the log.
+      - name: Tool versions
+        run: verilator --version && yosys -V && python3 --version
+      # Each make target prints its own one-line reproduction command.
+      - name: make lint
+        run: make lint
+      - name: make synth
+        run: make synth
+      - name: make cdc
+        run: make cdc
+      - name: make vplan (structure, script self-tests, traceability)
+        run: make vplan
+      - name: make results CHECK=1 (README block equals docs/results.md)
+        run: make results CHECK=1
+      - name: make smoke
+        run: make smoke
+      # Keep the logs and summaries of a failing run (not the build trees).
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checks-logs
+          path: |
+            out/**/*.log
+            out/**/*.json
+            out/**/*.md
+          if-no-files-found: ignore
+
+  # Formal at ASIZE=2 (and the quick k-induction at 3): every assertion proven unbounded and
+  # every formal cover reached, as in sign-off SO-3.
+  formal:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # Sources and the pinned OSS CAD Suite.
+      - uses: actions/checkout@v5
+      - uses: YosysHQ/setup-oss-cad-suite@v4
+        with:
+          version: "2026-11-21"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      # k-induction at ASIZE 2 and 3, then the cover run at ASIZE 2.
+      - name: make formal TASK=prove ASIZE=2
+        run: make formal TASK=prove ASIZE=2
+      - name: make formal TASK=prove ASIZE=3
+        run: make formal TASK=prove ASIZE=3
+      - name: make formal TASK=cover ASIZE=2
+        run: make formal TASK=cover ASIZE=2 TIMEOUT=900
+      # Keep the SBY logs of a failing run.
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: formal-logs
+          path: |
+            out/**/*.log
+            out/**/summary.json
+          if-no-files-found: ignore
+
+  # UVM on Verilator: build the testbench once and run every test on three seeds.
+  uvm:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      # Sources, the pinned OSS CAD Suite, and UVM at the pinned commit in the default UVM_HOME.
+      - uses: actions/checkout@v5
+      - uses: YosysHQ/setup-oss-cad-suite@v4
+        with:
+          version: "2026-11-21"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: UVM 2020-3.2 (chipsalliance/uvm-verilator @ 1eab10a)
+        run: |
+          mkdir -p ~/tools/uvm-2020-3.2 && cd ~/tools/uvm-2020-3.2
+          git init -q && git remote add origin https://github.com/chipsalliance/uvm-verilator.git
+          git fetch -q --depth 1 origin 1eab10a7995c7846dcad7305b995ddb265880433 && git checkout -q FETCH_HEAD
+      # One build, then the seven tests x seeds 1-3 in parallel (no directed entries).
+      - name: make regress N=3 (the seven tests)
+        run: >
+          make regress N=3
+          TESTS="smoke_test fill_to_full_test drain_to_empty_test thrash_full_test thrash_empty_test random_rates_test random_mix_test"
+      # Keep the regression summary and logs of a failing run.
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uvm-logs
+          path: |
+            out/async_fifo/regress/
+            out/async_fifo/run/*/sim.log
+          if-no-files-found: ignore
+
+  # Nightly: every tests.toml entry on 20 seeds (with the coverage merge) and the negative
+  # assertion tests. Not a sign-off run: sign-off is N = 200 on the development host.
+  nightly:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      # Sources, the pinned OSS CAD Suite, and UVM at the pinned commit.
+      - uses: actions/checkout@v5
+      - uses: YosysHQ/setup-oss-cad-suite@v4
+        with:
+          version: "2026-11-21"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: UVM 2020-3.2 (chipsalliance/uvm-verilator @ 1eab10a)
+        run: |
+          mkdir -p ~/tools/uvm-2020-3.2 && cd ~/tools/uvm-2020-3.2
+          git init -q && git remote add origin https://github.com/chipsalliance/uvm-verilator.git
+          git fetch -q --depth 1 origin 1eab10a7995c7846dcad7305b995ddb265880433 && git checkout -q FETCH_HEAD
+      # 20 seeds per test, one random rerun compared byte for byte.
+      - name: make regress N=20 RECHECK=1
+        run: make regress N=20 RECHECK=1
+      - name: make sva-neg
+        run: make sva-neg
+      # Keep the summaries (and logs, on failure).
+      - name: Upload summaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-summaries
+          path: |
+            out/async_fifo/regress/summary.md
+            out/async_fifo/regress/junit.xml
+            out/async_fifo/cov/*.md
+            out/async_fifo/sva_neg/*/summary.md
+          if-no-files-found: ignore

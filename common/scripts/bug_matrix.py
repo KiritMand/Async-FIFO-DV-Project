@@ -41,6 +41,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import simlog  # noqa: E402
 import vplan_check  # noqa: E402
+import provenance  # noqa: E402
 
 # The parts a bug is run through, the cells they fill, and the values a cell can take.
 PARTS = ("static", "sim_sb", "sim_sva", "formal")
@@ -85,6 +86,7 @@ class Ctx:
     sim_vars: dict[str, str]
     jobs: int
     keep_builds: bool = False
+    prov: dict = field(default_factory=dict)          # tree and tools at the start of this run
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     # One status line, never interleaved between the two lanes.
@@ -345,7 +347,8 @@ def last_step(log: Path | None) -> int | None:
 # Save one part's result with the fingerprint it was produced under.
 def save_part(ctx: Ctx, bug: Bug, part: str, fp: str, data: dict) -> None:
     p = ctx.out / bug.id / f"{part}.json"
-    p.write_text(json.dumps({"fingerprint": fp, "finished": time.strftime("%Y-%m-%dT%H:%M:%S"), "data": data},
+    p.write_text(json.dumps({"fingerprint": fp, "finished": time.strftime("%Y-%m-%dT%H:%M:%S"), "data": data,
+                             "provenance": ctx.prov},
                             indent=1) + "\n", encoding="utf-8")
 
 
@@ -736,6 +739,51 @@ def problems(bugs: list[Bug], results: dict, stale: dict, kinds: dict[str, str])
     return out
 
 
+# Everything a run or a report needs from the repository: settings, bugs, findings text, vplan
+# property kinds and rows, the base RTL text and each bug's fingerprint. Raises ValueError,
+# OSError or CalledProcessError on a broken setup.
+def load_context(ip_root: Path) -> dict:
+    repo = Path(subprocess.run(["git", "-C", str(ip_root), "rev-parse", "--show-toplevel"], capture_output=True,
+                               text=True, check=True).stdout.strip())
+    matrix, bugs = load_bugs(ip_root / "bugs" / "bugs.toml")
+    findings = load_findings(ip_root / "bugs" / "bugs.toml")
+    kinds, vrows = load_vplan(ip_root / "docs" / "vplan.md")
+    rel = (ip_root / RTL_REL).relative_to(repo).as_posix()
+    base_text = subprocess.run(["git", "-C", str(repo), "show", f"{BASE_TAG}:{rel}"], capture_output=True,
+                               text=True, check=True).stdout
+    if (ip_root / RTL_REL).read_text(encoding="utf-8") != base_text:
+        raise ValueError(f"{RTL_REL} differs from tag {BASE_TAG}: the patches target {BASE_TAG}; "
+                         "regenerate them for the new RTL (plan M8 pitfall)")
+    files = env_files(repo, ip_root)
+    fps = {b.id: fingerprint(files, base_text, matrix, ip_root / "bugs" / b.patch if b.patch else None) for b in bugs}
+    return {"repo": repo, "matrix": matrix, "bugs": bugs, "findings": findings, "kinds": kinds, "vrows": vrows,
+            "base_text": base_text, "fps": fps}
+
+
+# Summary for the results page (make_results.py): per bug its title and actual cells, the
+# provenance record of every saved part, and the problems `make bugs` would fail on.
+def summarize(ip_root: Path, out: Path) -> dict:
+    c = load_context(ip_root.resolve())
+    results, stale = load_results(out, c["bugs"], c["fps"])
+    base_reached = results.get(BASE_ID, {}).get("formal", {}).get("cover", {}).get("reached")
+    provs = []
+    for b in c["bugs"]:
+        for part in PARTS:
+            p = out / b.id / f"{part}.json"
+            if p.is_file():
+                provs.append(json.loads(p.read_text(encoding="utf-8")).get("provenance"))
+    # Failing runs out of all runs for the two simulation parts (None when not run or broken).
+    def sim_count(parts: dict, part: str) -> list[int] | None:
+        d = parts.get(part)
+        return None if not d or d.get("error") or not d.get("runs") else \
+            [sum(r["status"] != "PASS" for r in d["runs"]), len(d["runs"])]
+    return {"bugs": [{"id": b.id, "title": b.title, "cells": actual_cells(results.get(b.id, {}), c["kinds"], base_reached),
+                      "sim": {p: sim_count(results.get(b.id, {}), p) for p in ("sim_sb", "sim_sva")}}
+                     for b in c["bugs"]],
+            "problems": problems(c["bugs"], results, stale, c["kinds"]), "provenance": provs,
+            "formal_asize": c["matrix"]["formal_asize"], "seeds": c["matrix"]["seeds"], "tests": c["matrix"]["tests"]}
+
+
 # Parse arguments, check the base RTL, run what was asked, write the page, report problems.
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -751,27 +799,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--repro", default="make bugs", help="the command that reproduces this run (printed)")
     args = ap.parse_args(argv)
     ip_root = args.ip_root.resolve()
-    repo = Path(subprocess.run(["git", "-C", str(ip_root), "rev-parse", "--show-toplevel"], capture_output=True,
-                               text=True, check=True).stdout.strip())
     try:
-        matrix, bugs = load_bugs(ip_root / "bugs" / "bugs.toml")
-        findings = load_findings(ip_root / "bugs" / "bugs.toml")
-        kinds, vrows = load_vplan(ip_root / "docs" / "vplan.md")
-        rel = (ip_root / RTL_REL).relative_to(repo).as_posix()
-        base_text = subprocess.run(["git", "-C", str(repo), "show", f"{BASE_TAG}:{rel}"], capture_output=True,
-                                   text=True, check=True).stdout
-        if (ip_root / RTL_REL).read_text(encoding="utf-8") != base_text:
-            raise ValueError(f"{RTL_REL} differs from tag {BASE_TAG}: the patches target {BASE_TAG}; "
-                             "regenerate them for the new RTL (plan M8 pitfall)")
-        if args.only and (unknown := set(args.only) - {b.id for b in bugs}):
+        c = load_context(ip_root)
+        if args.only and (unknown := set(args.only) - {b.id for b in c["bugs"]}):
             raise ValueError(f"--only: unknown ids {sorted(unknown)}")
     except (ValueError, OSError, subprocess.CalledProcessError) as e:
         print(f"bug_matrix: {e}", file=sys.stderr)
         return 2
-    files = env_files(repo, ip_root)
-    fps = {b.id: fingerprint(files, base_text, matrix, ip_root / "bugs" / b.patch if b.patch else None) for b in bugs}
+    repo, matrix, bugs, findings = c["repo"], c["matrix"], c["bugs"], c["findings"]
+    kinds, vrows, base_text, fps = c["kinds"], c["vrows"], c["base_text"], c["fps"]
     sim_vars = dict(kv.split("=", 1) for kv in args.sim_vars.split())
-    ctx = Ctx(repo, ip_root, args.out.resolve(), matrix, kinds, base_text, sim_vars, args.jobs, args.keep_builds)
+    ctx = Ctx(repo, ip_root, args.out.resolve(), matrix, kinds, base_text, sim_vars, args.jobs, args.keep_builds,
+              provenance.record(repo))
     if not args.report_only:
         sel = [b for b in bugs if not args.only or b.id in args.only]
         t0 = time.monotonic()

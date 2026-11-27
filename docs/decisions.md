@@ -277,7 +277,7 @@ IDs are `DEC-NNN`; cite them from code comments and other docs.
 ## DEC-012 — A02 after the M7 audit
 
 - **Date:** 2026-11-24
-- **Status:** PROPOSED (awaiting the owner)
+- **Status:** APPROVED, option 1 (owner, 2026-11-27, M10 kickoff: "OK" to the recommendation)
 - **Finding:** with A02 dropped (a reset may rise in any formal step, not only with its own
   clock's rising edge), k-induction still proves every property at ASIZE 2 and 3
   (`make formal TASK=audit_a02 ASIZE=<n>`). The RTL logic tolerates any release timing. The
@@ -294,7 +294,13 @@ IDs are `DEC-NNN`; cite them from code comments and other docs.
      Loses the testbench check of a real integration rule.
   3. **Keep A02 as is,** with the audit result documented. No work; the proof keeps an
      assumption it does not need.
-- **Consequences:** recorded once the owner chooses.
+- **Consequences (option 1, applied in M10):** the formal form of A02 moves behind the define
+  `FORMAL_A02` (off), like A03, so the SO-3 proof rests on A01 and A05. The simulation checks
+  `asm_A02_*` stay (they hold the testbench to spec §8), and so does the ledger row (status
+  active: a physical requirement). The `audit_a02` SBY task is removed: `prove` itself now runs
+  without A02. MCY's equivalence miter and formal mutant test take their environment from the
+  checker, so they also lose A02; the M10 rerun (DEC-016 D1) measures the effect. vplan §5
+  updated.
 
 ---
 
@@ -398,3 +404,26 @@ IDs are `DEC-NNN`; cite them from code comments and other docs.
   detections. No check, bin, property or assumption was changed.
 - **Consequences:** `mcy/triage.toml` has no entries. Any later MCY run that shows a survivor
   (another seed, ASIZE = 3, or after an RTL or testbench change) reopens triage under plan step 5.
+
+---
+
+## DEC-016 — M10 release decisions
+
+- **Date:** 2026-11-27
+- **Status:** APPROVED (owner, 2026-11-27, M10 kickoff: "OK" to the recommendations)
+- **Options and choices:**
+  1. **D1, evidence freshness.** *Choice: rerun every flow at the M10 code commit* (sign-off
+     regression with rechecks, formal sign-off, negative SVA tests, CDC, the full bug matrix, MCY
+     seeds 1 and 2 and the scoreboard-only probe), unattended. Rejected: rerun only the sign-off
+     set and show the bug matrix and MCY with their older revisions. Every flow records the git
+     revision it ran at; `make results --strict` fails if a result is missing, failed, or ran
+     at a revision whose flow inputs differ from HEAD.
+  2. **D2, getting CI green.** *Choice: Claude may push to the throwaway branch `m10-ci` only*
+     (never `main`, never tags) to iterate on the workflow. The owner commits, tags and pushes
+     `main`.
+  3. **D3, items open before `v1.0`.** DEC-012 option 1 (above). The CDC waiver of vplan §8 is
+     confirmed. The B12 stimulus gap (bug matrix finding 8) stays a documented known gap, fixed
+     after `v1.0`, because the fix changes stimulus and the matrix result. The vplan stays DRAFT
+     until the owner says they have reviewed it.
+- **Consequences:** two owner commits in M10: A (code, docs, CI) and B (the results generated at
+  A), with the `v1.0` tag on B.
